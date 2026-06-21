@@ -6,7 +6,7 @@
   "author": "Jairo Carrizales <carribros@gmail.com>",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
+    "start": "set \"ELECTRON_RUN_AS_NODE=\" && electron .",
     "dist": "electron-builder --win"
   },
   "build": {
