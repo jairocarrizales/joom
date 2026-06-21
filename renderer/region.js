@@ -10,6 +10,9 @@ let locked = true;          // ¿proporción fija? (false en modo área)
 let rect = null;            // { x, y, w, h } en px de ventana
 let drag = null;            // { mode:'move'|'nw'|'ne'|'sw'|'se', ... }
 const HANDLE = 26;
+let marker = false;         // modo "grabando": solo rectángulo parpadeante, sin máscara ni asas
+let blinkOn = true;         // estado del parpadeo
+setInterval(() => { if (marker) { blinkOn = !blinkOn; draw(); } }, 500);
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -58,6 +61,20 @@ function corners() {
 
 function draw() {
   ctx.clearRect(0, 0, W, H);
+
+  // Modo "grabando": sin máscara ni asas; solo un rectángulo punteado que
+  // parpadea marcando la zona capturada. La ventana es click-through y
+  // content-protected, así que es una guía que NO sale en el video.
+  if (marker) {
+    if (!rect || !blinkOn) return;
+    ctx.strokeStyle = '#ff3b30';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([16, 10]);
+    ctx.strokeRect(rect.x + 2, rect.y + 2, Math.max(0, rect.w - 4), Math.max(0, rect.h - 4));
+    ctx.setLineDash([]);
+    return;
+  }
+
   // Mascara oscura fuera del rectángulo
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, W, H);
@@ -128,6 +145,7 @@ function report() {
 }
 
 window.addEventListener('mousedown', (e) => {
+  if (marker) return; // en modo grabando no se interactúa
   const mx = e.clientX, my = e.clientY;
   if (rect) {
     const h = hitHandle(mx, my);
@@ -148,6 +166,7 @@ window.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
+  if (marker) return;
   // Cursor según la zona cuando no se está arrastrando
   if (!drag) {
     if (rect) {
@@ -206,4 +225,13 @@ window.loom.onZoneConfig(({ aspect: a, rect: r }) => {
   clampRect();
   draw();
   report();
+});
+
+// Entrar/salir del modo "grabando" (rectángulo parpadeante, sin interacción).
+window.loom.onZoneMark(({ on, rect: r, aspect: a }) => {
+  marker = !!on;
+  if (typeof a === 'number' && a > 0) { locked = true; aspect = a; }
+  if (r) { rect = { x: r.fx * W, y: r.fy * H, w: r.fw * W, h: r.fh * H }; }
+  blinkOn = true;
+  draw();
 });

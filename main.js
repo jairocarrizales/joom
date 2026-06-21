@@ -15,6 +15,8 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
+const https = require('https');
 const { spawn } = require('child_process');
 
 // ffmpeg empaquetado (ffmpeg-static trae ffmpeg.exe en Windows); si no, el del PATH.
@@ -28,6 +30,24 @@ try {
 if (ffmpegPath) ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
 if (!ffmpegPath || !fs.existsSync(ffmpegPath)) ffmpegPath = 'ffmpeg';
 
+// yt-dlp: binario empaquetado en bin/ si existe; si no, el del PATH (lo instala
+// el usuario con `pip install yt-dlp`). Se usa para el modo reel + YouTube.
+let ytDlpPath = 'yt-dlp';
+{
+  const bundled = path.join(__dirname, 'bin', 'yt-dlp.exe').replace('app.asar', 'app.asar.unpacked');
+  if (fs.existsSync(bundled)) {
+    ytDlpPath = bundled;
+  } else if (process.platform === 'win32') {
+    // Node en Windows no aplica PATHEXT al hacer spawn de un comando sin extensión,
+    // así que resolvemos la ruta absoluta de yt-dlp.exe del PATH.
+    try {
+      const out = require('child_process').execSync('where yt-dlp', { encoding: 'utf8' });
+      const exe = out.split(/\r?\n/).map((l) => l.trim()).find((l) => /\.exe$/i.test(l));
+      if (exe) ytDlpPath = exe;
+    } catch (_) { /* no instalado; la descarga avisará */ }
+  }
+}
+
 // --- Estado global -----------------------------------------------------------
 
 let controlWindow = null;   // Panel de control (UI principal)
@@ -35,6 +55,7 @@ let overlayWindow = null;   // Burbuja flotante de la webcam
 let recorderWindow = null;  // Ventana oculta que compone y graba
 let annotateWindow = null;  // Capa de anotaciones a pantalla completa
 let recbarWindow = null;    // Barra unificada de grabación (controles + anotaciones)
+let teleprompterWindow = null; // Teleprompter (guion desplazable, flotante)
 
 let annotTool = 'none';     // 'none' | 'rect' | 'arrow' | 'laser' | 'number'
 let annotColor = '#ff3b30';
@@ -57,8 +78,8 @@ let systemAudio = false;    // ¿capturar también el audio del sistema?
 
 // Modo reel vertical (9:16)
 let recMode = 'normal';     // 'normal' | 'reel' | 'podcast'
-let bandPos = 'bottom';     // 'top' | 'bottom' | 'bubble' (banda de la webcam en reel)
-let bandHeightFrac = 0.5;   // alto de la banda respecto a 1920 (50% por defecto = mitad y mitad)
+let bandPos = 'full';       // 'full' (100% cámara) | 'youtube-top' | 'youtube-pie'
+let bandHeightFrac = 0.30;  // alto de la banda (máx 30% para que la zona quede siempre vertical)
 let cropRect = { fx: 0.15, fy: 0.1, fw: 0.7, fh: 0.8 }; // zona de pantalla (reel)
 let reelHeadline = { text: '', text2: '', fg: '#ffffff', bg: '#000000', animate: false }; // banner central del reel
 let reelHeadlineOffset = 0; // 0..0.60 distancia del banner a la cámara (overlay sobre la zona de pantalla)
@@ -67,6 +88,9 @@ let bubbleSizeFrac = 0;     // 0 = auto (tamaño on-screen), >0 = ancho como % d
 let bubbleLocked = false;   // si true: la burbuja queda fija en el canvas y no se mueve aunque el usuario arrastre la zona/pantalla
 let bubbleLockedRect = null; // {fx, fy, fw, fh} en fracciones del canvas, capturadas al bloquear
 let regionWindow = null;    // selector de zona
+let reelYtPath = '';        // ruta local del contenido del reel (video o PDF)
+let reelMediaKind = 'video'; // 'video' | 'pdf' (presentación/diapositivas)
+let ytPlaying = false;      // ¿el video está reproduciéndose (durante la grabación)?
 
 // Aspecto (ancho/alto) de la zona/área de pantalla en modo reel.
 function zoneAspect() {
@@ -121,6 +145,7 @@ function createControlWindow() {
     if (recorderWindow) recorderWindow.close();
     if (annotateWindow) annotateWindow.close();
     if (recbarWindow) recbarWindow.close();
+    if (teleprompterWindow) teleprompterWindow.close();
     if (regionWindow) regionWindow.close();
     app.quit();
   });
@@ -243,8 +268,29 @@ function createRegionWindow() {
 
 function openRegion(on) {
   regionOpen = !!on;
-  if (on) { createRegionWindow(); regionWindow.show(); }
-  else if (regionWindow) regionWindow.hide();
+  if (on) {
+    createRegionWindow();
+    regionWindow.setIgnoreMouseEvents(false); // selector interactivo en setup
+    const off = () => regionWindow && regionWindow.webContents.send('zone-mark', { on: false });
+    if (regionWindow.webContents.isLoading()) regionWindow.webContents.once('did-finish-load', off);
+    else off();
+    regionWindow.show();
+  } else if (regionWindow) regionWindow.hide();
+  updateControlZ();
+}
+
+// Durante la grabación de reel: convertir el selector en un marcador parpadeante
+// click-through (no bloquea la pantalla) y content-protected (no sale en el video).
+function markZoneRecording() {
+  if (recMode !== 'reel' || isFullCam()) { openRegion(false); return; } // 'solo cámara' no tiene zona
+  createRegionWindow();
+  regionWindow.setIgnoreMouseEvents(true, { forward: true });
+  regionWindow.setContentProtection(true);
+  regionWindow.show();
+  regionOpen = true;
+  const send = () => regionWindow && regionWindow.webContents.send('zone-mark', { on: true, rect: cropRect, aspect: zoneAspect() });
+  if (regionWindow.webContents.isLoading()) regionWindow.webContents.once('did-finish-load', send);
+  else send();
   updateControlZ();
 }
 
@@ -255,7 +301,7 @@ function reelPreviewSettings() {
     mode: 'reel', cameraId, bandPos, bandHeightFrac, cropRect, zoom: webcamZoom,
     shape: cameraShape, border: cameraBorder,
     reelHeadline, reelHeadlineOffset, reelHeadlinePos, bubbleSizeFrac,
-    bubbleLocked, bubbleLockedRect,
+    bubbleLocked, bubbleLockedRect, ytUrl: currentYtUrl(), mediaKind: reelMediaKind,
     systemAudio: false,
   };
 }
@@ -271,6 +317,10 @@ function showReelPreview() {
   });
   recorderWindow.setAlwaysOnTop(true, 'floating');
   recorderWindow.showInactive();
+  // Reafirmar AL MOSTRAR: la ventana se crea oculta y en Windows la protección
+  // de captura solo "agarra" cuando la ventana es visible. Sin esto, la previa
+  // se colaba dentro del video grabado (efecto "doble").
+  recorderWindow.setContentProtection(true);
   const send = () => recorderWindow.webContents.send('start-preview', reelPreviewSettings());
   if (recorderWindow.webContents.isLoading()) recorderWindow.webContents.once('did-finish-load', send);
   else send();
@@ -283,30 +333,36 @@ function hideReelPreview() {
   }
 }
 
-// Vista previa en vivo (normal/podcast) durante la grabación: muestra el compositor
-// (content-protected, no sale en el video) abajo a la derecha.
-function showRecPreview() {
-  if (!recorderWindow) return;
+// Vista previa del modo podcast (lienzo 16:9 con pantalla + cámara vertical),
+// para encuadrar ANTES de grabar.
+function podcastPreviewSettings() {
+  return {
+    mode: 'podcast', cameraId, zoom: webcamZoom,
+    shape: 'vertical', border: cameraBorder, systemAudio: false,
+  };
+}
+
+function showPodcastPreview() {
+  if (!recorderWindow) createRecorderWindow();
   const d = screen.getPrimaryDisplay();
-  const sz = d.size;
-  let aspect;
-  if (recMode === 'podcast') aspect = 16 / 9; // lienzo fijo 1920×1080
-  else aspect = sz.width / sz.height;
-  if (!isFinite(aspect) || aspect <= 0) aspect = 16 / 9;
-  const w = 360;
-  const h = Math.max(120, Math.round(w / aspect));
+  const w = 360, h = 203; // 16:9
   recorderWindow.setBounds({
     x: d.workArea.x + d.workArea.width - w - 20,
-    y: d.workArea.y + d.workArea.height - h - 20,
+    y: d.workArea.y + 20,
     width: w, height: h,
   });
-  recorderWindow.setAlwaysOnTop(true, 'screen-saver');
+  recorderWindow.setAlwaysOnTop(true, 'floating');
   recorderWindow.showInactive();
+  // Reafirmar la protección de captura al mostrar (ver nota en showReelPreview).
+  recorderWindow.setContentProtection(true);
+  const send = () => recorderWindow.webContents.send('start-preview', podcastPreviewSettings());
+  if (recorderWindow.webContents.isLoading()) recorderWindow.webContents.once('did-finish-load', send);
+  else send();
 }
 
 function sendReelParams() {
   if (recMode === 'reel' && recorderWindow) {
-    recorderWindow.webContents.send('reel-params', { bandPos, bandHeightFrac, cropRect, zoom: webcamZoom, reelHeadline, reelHeadlineOffset, reelHeadlinePos, bubbleSizeFrac, shape: cameraShape, border: cameraBorder, bubbleLocked, bubbleLockedRect });
+    recorderWindow.webContents.send('reel-params', { bandPos, bandHeightFrac, cropRect, zoom: webcamZoom, reelHeadline, reelHeadlineOffset, reelHeadlinePos, bubbleSizeFrac, shape: cameraShape, border: cameraBorder, bubbleLocked, bubbleLockedRect, ytUrl: currentYtUrl(), mediaKind: reelMediaKind });
   }
 }
 
@@ -366,6 +422,46 @@ function createRecbarWindow() {
   recbarWindow.on('closed', () => { recbarWindow = null; });
 }
 
+// --- Teleprompter ------------------------------------------------------------
+// Ventana flotante con el guion. always-on-top + content-protected: se ve por
+// encima de todo (en cualquier modo: normal, reel vertical, podcast) pero NO
+// aparece en la grabación. Movible y redimensionable para adaptarla a la pantalla.
+function createTeleprompterWindow() {
+  if (teleprompterWindow) { teleprompterWindow.show(); return; }
+  const d = screen.getPrimaryDisplay();
+  const w = 560, h = 300;
+  teleprompterWindow = new BrowserWindow({
+    width: w, height: h,
+    x: Math.round(d.workArea.x + (d.workArea.width - w) / 2),
+    y: d.workArea.y + 40,
+    frame: false, transparent: true, hasShadow: false,
+    resizable: true, movable: true, skipTaskbar: true, alwaysOnTop: true,
+    fullscreenable: false, maximizable: false,
+    minWidth: 280, minHeight: 140, maxWidth: 1400, maxHeight: 1100,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  teleprompterWindow.setAlwaysOnTop(true, 'screen-saver');
+  teleprompterWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  teleprompterWindow.setContentProtection(true); // el guion no debe salir en el video
+  teleprompterWindow.loadFile(path.join(__dirname, 'renderer', 'teleprompter.html'));
+  // Reafirmar la protección al mostrar (en Windows agarra con la ventana visible).
+  teleprompterWindow.once('show', () => teleprompterWindow.setContentProtection(true));
+  teleprompterWindow.on('closed', () => { teleprompterWindow = null; });
+}
+
+ipcMain.handle('teleprompter-toggle', (_e, on) => {
+  if (on) createTeleprompterWindow();
+  else if (teleprompterWindow) teleprompterWindow.close();
+  if (controlWindow) controlWindow.webContents.send('tp-state', !!on);
+  return !!on;
+});
+
 // Traer la burbuja de la cámara al frente (si quedó tapada/fuera de pantalla).
 ipcMain.on('raise-camera', () => raiseOverlay());
 
@@ -408,8 +504,10 @@ function endRecordingUi() {
   annotationsOpen = false;
   annotTool = 'none';
   if (annotateWindow) annotateWindow.close();
-  // La preview en vivo de normal/podcast se oculta (en reel persiste como preview).
-  if (recorderWindow && recMode !== 'reel') recorderWindow.hide();
+  // En modo normal ocultamos el compositor; en reel/podcast lo DEJAMOS visible
+  // como vista previa para poder grabar otra vez sin reiniciar el modo.
+  if (recorderWindow && recMode === 'normal') recorderWindow.hide();
+  if (regionWindow) { regionWindow.close(); regionOpen = false; }
 }
 
 // Atajo de láser (durante la grabación): alterna la herramienta vía la recbar.
@@ -557,11 +655,12 @@ ipcMain.handle('start-recording', async (_e, settings) => {
   const full = {
     ...settings,
     cameraId, shape: cameraShape, border: cameraBorder, zoom: webcamZoom,
-    mode: recMode, bandPos, bandHeightFrac, cropRect,
+    mode: recMode, bandPos, bandHeightFrac, cropRect, ytUrl: currentYtUrl(), mediaKind: reelMediaKind,
   };
 
-  if (recMode === 'reel' && bandPos !== 'bubble') {
-    // Reel con banda: webcam va en banda; ocultar burbuja y selector de zona.
+  if (recMode === 'reel') {
+    // Reel (100% cámara / YouTube): la cámara se compone en el canvas, sin burbuja
+    // ni zona de escritorio. La previa vertical sigue visible (content-protected).
     if (overlayWindow) overlayWindow.hide();
     openRegion(false);
   } else if (recMode === 'podcast') {
@@ -569,8 +668,8 @@ ipcMain.handle('start-recording', async (_e, settings) => {
     if (overlayWindow) overlayWindow.hide();
     openRegion(false);
   } else {
-    // Normal o reel+burbuja: la webcam es burbuja.
-    if (recMode === 'reel') openRegion(false); // cerrar selector también en reel+burbuja al grabar
+    // Normal: la burbuja flotante es el autovistazo (excluida de la captura;
+    // además coincide pixel a pixel con la del canvas, así que no se duplica).
     if (cameraShape !== 'none') {
       if (!overlayWindow) createOverlayWindow();
       else overlayWindow.show();
@@ -584,14 +683,21 @@ ipcMain.handle('start-recording', async (_e, settings) => {
   createRecbarWindow();
   // Reafirmar que la burbuja queda siempre al frente al grabar (sin moverla)
   setTimeout(pinOverlay, 80);
-  // Vista previa en vivo: opcional en modo normal, obligatoria en podcast
-  // (en podcast no hay burbuja flotante, así que sin esto el usuario no se ve).
-  const wantPrev = (settings.livePreview && recMode !== 'reel') || recMode === 'podcast';
-  if (wantPrev) {
-    const showPrev = () => showRecPreview();
-    if (recorderWindow.webContents.isLoading()) recorderWindow.webContents.once('did-finish-load', showPrev);
-    else showPrev();
+  // Reel + YouTube: arranca reproduciendo y muestra el botón de pausa/play.
+  const isYt = recMode === 'reel' && (bandPos === 'youtube-top' || bandPos === 'youtube-pie') && !!reelYtPath;
+  const isScreen = recMode === 'reel' && (bandPos === 'screen-top' || bandPos === 'screen-pie');
+  ytPlaying = isYt && reelMediaKind === 'video';
+  const barKind = isScreen ? 'screen' : reelMediaKind;
+  if ((isYt || isScreen) && recbarWindow) {
+    const showBtn = () => recbarWindow.webContents.send('yt-button', { on: true, kind: barKind });
+    if (recbarWindow.webContents.isLoading()) recbarWindow.webContents.once('did-finish-load', showBtn);
+    else showBtn();
   }
+  // En reel/podcast mantenemos la vista previa del compositor visible durante la
+  // grabación (para ver cámara + zona). Reafirmamos la protección de contenido
+  // para que la captura de pantalla la EXCLUYA y NO aparezca dentro del video.
+  // (En modo normal no hay previa: la burbuja es el autovistazo.)
+  if (recorderWindow) recorderWindow.setContentProtection(true);
   updateControlZ();
 
   // Esperar a que el recorder esté listo, luego enviar la orden.
@@ -683,15 +789,16 @@ ipcMain.handle('set-mode', (_e, mode) => {
     }
   };
   if (recMode === 'reel') {
-    if (overlayWindow) overlayWindow.hide();   // en reel la webcam va en banda, no burbuja
-    openRegion(!isFullCam());
+    if (overlayWindow) overlayWindow.hide();   // en reel la cámara va en el canvas, no burbuja
+    openRegion(false);                          // el nuevo reel no usa zona de escritorio
     showReelPreview();
   } else if (recMode === 'podcast') {
     // La webcam va integrada dentro del canvas (panel derecho vertical),
-    // así que no hay burbuja flotante ni selector de zona.
+    // así que no hay burbuja flotante ni selector de zona. Mostramos la vista
+    // previa para que el usuario vea pantalla + cámara antes de grabar.
     if (overlayWindow) overlayWindow.hide();
     openRegion(false);
-    hideReelPreview();
+    showPodcastPreview();
   } else {
     openRegion(false);
     hideReelPreview();
@@ -701,46 +808,12 @@ ipcMain.handle('set-mode', (_e, mode) => {
 });
 
 ipcMain.on('set-reel', (_e, opts) => {
+  // Nuevo reel: 'full' (100% cámara) | 'youtube-top' | 'youtube-pie'. Sin burbuja
+  // ni zona de escritorio. El título va siempre centrado (lo dibuja el recorder).
+  if (typeof opts.ytPath === 'string') reelYtPath = opts.ytPath;
   if (opts.bandPos) bandPos = opts.bandPos;
-  if (typeof opts.bandHeightFrac === 'number') bandHeightFrac = opts.bandHeightFrac;
   if (opts.reelHeadline && typeof opts.reelHeadline === 'object') reelHeadline = opts.reelHeadline;
-  if (typeof opts.reelHeadlineOffset === 'number') reelHeadlineOffset = opts.reelHeadlineOffset;
-  if (typeof opts.reelHeadlinePos === 'string') reelHeadlinePos = opts.reelHeadlinePos;
-  if (typeof opts.bubbleSizeFrac === 'number') bubbleSizeFrac = opts.bubbleSizeFrac;
-  if (typeof opts.bubbleLocked === 'boolean') {
-    if (opts.bubbleLocked && !bubbleLocked) {
-      // Al bloquear: capturar la posición actual de la burbuja en el canvas
-      const r = getWebcamRectFractions();
-      if (r && cropRect && cropRect.fw > 0 && cropRect.fh > 0) {
-        bubbleLockedRect = {
-          fx: (r.fx - cropRect.fx) / cropRect.fw,
-          fy: (r.fy - cropRect.fy) / cropRect.fh,
-          fw: r.fw / cropRect.fw,
-          fh: r.fh / cropRect.fh,
-        };
-      }
-      // Bloquear la ventana flotante en su sitio (evita arrastres accidentales)
-      if (overlayWindow) overlayWindow.setMovable(false);
-    } else if (!opts.bubbleLocked && bubbleLocked) {
-      bubbleLockedRect = null;
-      if (overlayWindow) overlayWindow.setMovable(true);
-    }
-    bubbleLocked = opts.bubbleLocked;
-  }
-  if (isFullCam()) {
-    // Cámara a pantalla completa: no hay zona que ajustar.
-    openRegion(false);
-  } else if (regionWindow) {
-    // Cambió el alto -> cambia el aspecto de la zona; re-bloquear el selector.
-    regionWindow.webContents.send('zone-config', { aspect: zoneAspect() });
-  }
-  // En modo reel + burbuja, mostramos el overlay para que el usuario lo coloque/arrastre.
-  if (recMode === 'reel' && bandPos === 'bubble' && cameraShape !== 'none') {
-    if (!overlayWindow) createOverlayWindow();
-    else overlayWindow.show();
-  } else if (recMode === 'reel' && bandPos !== 'bubble') {
-    if (overlayWindow) overlayWindow.hide();
-  }
+  if (recMode === 'reel' && overlayWindow) overlayWindow.hide();
   sendReelParams();
 });
 
@@ -748,6 +821,10 @@ ipcMain.on('set-zoom', (_e, z) => {
   webcamZoom = z || 1;
   if (overlayWindow) {
     overlayWindow.webContents.send('overlay-config', { cameraId, shape: cameraShape, border: cameraBorder, zoom: webcamZoom });
+  }
+  // Reflejar el zoom en vivo en la vista previa del compositor (reel Y podcast).
+  if (recorderWindow && !recorderWindow.isDestroyed()) {
+    recorderWindow.webContents.send('reel-params', { zoom: webcamZoom });
   }
   sendReelParams();
 });
@@ -876,6 +953,211 @@ ipcMain.handle('reveal-file', async (_e, filePath) => {
   if (!allowed.some((root) => resolved === root || resolved.startsWith(root + path.sep))) return;
   if (!fs.existsSync(resolved)) return;
   shell.showItemInFolder(resolved);
+});
+
+// --- YouTube en reel (descarga con yt-dlp) -----------------------------------
+
+// Servidor local (solo 127.0.0.1) que sirve el video descargado con CORS y
+// soporte de rangos. Así el <video> del recorder se carga "crossorigin" y NO
+// tiñe el canvas (file:// sí lo teñiría y rompería canvas.captureStream).
+let ytServer = null;
+let ytServerPort = 0;
+function ensureYtServer() {
+  if (ytServer) return;
+  ytServer = http.createServer((req, res) => {
+    if (!reelYtPath || !fs.existsSync(reelYtPath)) { res.writeHead(404); res.end(); return; }
+    let stat;
+    try { stat = fs.statSync(reelYtPath); } catch (_) { res.writeHead(404); res.end(); return; }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', /\.pdf$/i.test(reelYtPath) ? 'application/pdf' : 'video/mp4');
+    const range = req.headers.range;
+    const m = range && /bytes=(\d+)-(\d*)/.exec(range);
+    if (m) {
+      const start = parseInt(m[1], 10);
+      const end = m[2] ? parseInt(m[2], 10) : stat.size - 1;
+      res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${stat.size}`, 'Content-Length': end - start + 1 });
+      fs.createReadStream(reelYtPath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, { 'Content-Length': stat.size });
+      fs.createReadStream(reelYtPath).pipe(res);
+    }
+  });
+  ytServer.listen(0, '127.0.0.1', () => { ytServerPort = ytServer.address().port; });
+}
+
+// URL (con cache-bust por nombre de archivo) para que el recorder cargue el video.
+function currentYtUrl() {
+  if (!reelYtPath || !ytServerPort) return '';
+  return `http://127.0.0.1:${ytServerPort}/yt.mp4?v=${encodeURIComponent(path.basename(reelYtPath))}`;
+}
+
+
+ipcMain.handle('yt-download', async (_e, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
+    return { ok: false, error: 'Pega una URL válida de YouTube (http/https).' };
+  }
+  const send = (m) => controlWindow && controlWindow.webContents.send('yt-progress', m);
+  const out = path.join(os.tmpdir(), `joom-yt-${Date.now()}.mp4`);
+  const args = [
+    '-f', 'bv*[height<=720]+ba/b[height<=720]/b',
+    '--merge-output-format', 'mp4',
+    '--no-playlist', '--no-part', '--force-overwrites',
+    '-o', out,
+  ];
+  if (ffmpegPath && fs.existsSync(ffmpegPath)) { args.push('--ffmpeg-location', ffmpegPath); }
+  args.push(url.trim());
+  send('Iniciando descarga…');
+  return new Promise((resolve) => {
+    let proc;
+    try { proc = spawn(ytDlpPath, args); }
+    catch (e) { resolve({ ok: false, error: 'No se pudo ejecutar yt-dlp: ' + e.message }); return; }
+    let err = '';
+    const onData = (d) => {
+      const s = d.toString();
+      const m = /\[download\]\s+([\d.]+)%/.exec(s);
+      if (m) send(`Descargando… ${m[1]}%`);
+      else if (/Merging/i.test(s)) send('Uniendo audio y video…');
+    };
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', (d) => { err += d.toString(); onData(d); });
+    proc.on('error', (e) => resolve({ ok: false, error: 'No se pudo ejecutar yt-dlp (¿instalado?). ' + e.message }));
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(out)) {
+        reelYtPath = out;
+        reelMediaKind = 'video';
+        ensureYtServer();
+        sendReelParams();
+        send('Video listo ✓');
+        resolve({ ok: true, path: out });
+      } else {
+        resolve({ ok: false, error: 'yt-dlp falló. ' + err.slice(-300) });
+      }
+    });
+  });
+});
+
+// Subir un video desde la PC (se usa igual que el de YouTube en el reel).
+ipcMain.handle('pick-video', async () => {
+  const r = await dialog.showOpenDialog(controlWindow, {
+    title: 'Elige un video de tu PC',
+    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v', 'avi'] }],
+    properties: ['openFile'],
+  });
+  if (r.canceled || !r.filePaths[0]) return { ok: false };
+  reelYtPath = r.filePaths[0];
+  reelMediaKind = 'video';
+  ensureYtServer();
+  sendReelParams();
+  return { ok: true, path: reelYtPath };
+});
+
+// --- Presentaciones en el reel (PDF / PowerPoint / Google Slides) ------------
+
+// Descarga simple por HTTPS siguiendo redirecciones (para Google Slides export/pdf).
+function downloadFile(url, out, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 6) return reject(new Error('Demasiadas redirecciones'));
+    const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        const next = new URL(res.headers.location, url).toString();
+        resolve(downloadFile(next, out, redirects + 1));
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+      const ws = fs.createWriteStream(out);
+      res.pipe(ws);
+      ws.on('finish', () => ws.close(() => resolve()));
+      ws.on('error', reject);
+    });
+    req.on('error', reject);
+  });
+}
+
+// Convierte PowerPoint a PDF usando el PowerPoint instalado (automatización COM).
+function convertPptToPdf(input, output) {
+  return new Promise((resolve) => {
+    const ps = `
+$ErrorActionPreference='Stop'
+try {
+  $ppt = New-Object -ComObject PowerPoint.Application
+  $pres = $ppt.Presentations.Open(${JSON.stringify(input)}, $true, $false, $false)
+  $pres.SaveAs(${JSON.stringify(output)}, 32)
+  $pres.Close()
+  $ppt.Quit()
+  exit 0
+} catch { Write-Error $_; exit 1 }`;
+    const tmpPs = path.join(os.tmpdir(), `joom-ppt-${Date.now()}.ps1`);
+    try { fs.writeFileSync(tmpPs, ps, 'utf8'); } catch (_) { return resolve(false); }
+    const proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs]);
+    proc.on('error', () => resolve(false));
+    proc.on('close', (code) => { fs.unlink(tmpPs, () => {}); resolve(code === 0); });
+  });
+}
+
+// Subir una presentación de la PC: PDF (directo) o PowerPoint (convertido a PDF).
+ipcMain.handle('pick-presentation', async () => {
+  const r = await dialog.showOpenDialog(controlWindow, {
+    title: 'Elige un PDF o PowerPoint',
+    filters: [{ name: 'Presentación', extensions: ['pdf', 'pptx', 'ppt'] }],
+    properties: ['openFile'],
+  });
+  if (r.canceled || !r.filePaths[0]) return { ok: false };
+  const f = r.filePaths[0];
+  const send = (m) => controlWindow && controlWindow.webContents.send('yt-progress', m);
+  if (/\.pdf$/i.test(f)) {
+    reelYtPath = f; reelMediaKind = 'pdf'; ensureYtServer(); sendReelParams();
+    return { ok: true, kind: 'pdf' };
+  }
+  send('Convirtiendo PowerPoint a PDF (con tu PowerPoint)…');
+  const out = path.join(os.tmpdir(), `joom-ppt-${Date.now()}.pdf`);
+  const ok = await convertPptToPdf(f, out);
+  if (ok && fs.existsSync(out)) {
+    reelYtPath = out; reelMediaKind = 'pdf'; ensureYtServer(); sendReelParams();
+    return { ok: true, kind: 'pdf' };
+  }
+  return { ok: false, error: 'No se pudo convertir el PowerPoint. Ábrelo y expórtalo a PDF, y sube el PDF.' };
+});
+
+// Google Slides: descargar la presentación como PDF (debe estar compartida públicamente).
+ipcMain.handle('slides-download', async (_e, url) => {
+  const m = /presentation\/d\/([a-zA-Z0-9_-]+)/.exec(String(url || ''));
+  if (!m) return { ok: false, error: 'URL de Google Slides no válida.' };
+  const send = (msg) => controlWindow && controlWindow.webContents.send('yt-progress', msg);
+  const pdfUrl = `https://docs.google.com/presentation/d/${m[1]}/export/pdf`;
+  const out = path.join(os.tmpdir(), `joom-slides-${Date.now()}.pdf`);
+  send('Descargando Google Slides…');
+  try {
+    await downloadFile(pdfUrl, out);
+    if (!fs.existsSync(out) || fs.statSync(out).size < 1000) throw new Error('Archivo vacío (¿la presentación es pública?)');
+    reelYtPath = out; reelMediaKind = 'pdf'; ensureYtServer(); sendReelParams();
+    return { ok: true, kind: 'pdf' };
+  } catch (e) {
+    return { ok: false, error: 'No se pudo descargar. Comparte la presentación como "cualquiera con el enlace". ' + e.message };
+  }
+});
+
+// Navegar diapositivas durante la grabación (recbar -> recorder).
+ipcMain.on('slide-nav', (_e, dir) => {
+  if (recorderWindow) recorderWindow.webContents.send('slide-nav-cmd', dir === 'next' ? 'next' : 'prev');
+});
+
+// Zoom de la pantalla en banda durante la grabación (recbar -> recorder).
+ipcMain.on('screen-zoom', (_e, delta) => {
+  if (recorderWindow) recorderWindow.webContents.send('screen-zoom-cmd', Number(delta) || 0);
+});
+
+// Pausar/reanudar el video durante la grabación (recbar -> recorder + eco a la barra).
+ipcMain.on('yt-toggle', () => {
+  ytPlaying = !ytPlaying;
+  if (recorderWindow) recorderWindow.webContents.send('yt-toggle-cmd', ytPlaying);
+  if (recbarWindow) recbarWindow.webContents.send('yt-toggle-cmd', ytPlaying);
+});
+
+// Regresar/avanzar el video N segundos durante la grabación (recbar -> recorder).
+ipcMain.on('yt-seek', (_e, delta) => {
+  if (recorderWindow) recorderWindow.webContents.send('yt-seek-cmd', Number(delta) || 0);
 });
 
 // --- Transcodificación WebM -> MP4 (H.264 + AAC) -----------------------------

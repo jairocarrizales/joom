@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('loom', {
   zoneToggle: (on) => ipcRenderer.send('zone-toggle', on),
   zoneRect: (r) => ipcRenderer.send('zone-rect', r),
   onZoneConfig: (cb) => ipcRenderer.on('zone-config', (_e, c) => cb(c)),
+  onZoneMark: (cb) => ipcRenderer.on('zone-mark', (_e, c) => cb(c)),
   startRecording: (settings) => ipcRenderer.invoke('start-recording', settings),
   pauseRecording: () => ipcRenderer.send('pause-recording'),
   resumeRecording: () => ipcRenderer.send('resume-recording'),
@@ -35,6 +36,10 @@ contextBridge.exposeInMainWorld('loom', {
   onShortcut: (cb) => ipcRenderer.on('shortcut', (_e, a) => cb(a)),
   resizeControl: (h) => ipcRenderer.send('resize-control', h),
   revealFile: (p) => ipcRenderer.invoke('reveal-file', p),
+
+  // --- Teleprompter ---
+  teleprompterToggle: (on) => ipcRenderer.invoke('teleprompter-toggle', on),
+  onTpState: (cb) => ipcRenderer.on('tp-state', (_e, s) => cb(s)),
 
   // --- Burbuja (overlay) ---
   cameraId: getCameraIdArg(),
@@ -58,6 +63,22 @@ contextBridge.exposeInMainWorld('loom', {
   recbarResize: (w) => ipcRenderer.send('recbar-resize', w),
   onRb: (cb) => ipcRenderer.on('rb', (_e, c) => cb(c)),
   raiseCamera: () => ipcRenderer.send('raise-camera'),
+
+  // --- Contenido en el reel (video de YouTube/PC o presentación PDF/PPT/Slides) ---
+  ytDownload: (url) => ipcRenderer.invoke('yt-download', url),
+  pickVideo: () => ipcRenderer.invoke('pick-video'),               // subir video de la PC
+  pickPresentation: () => ipcRenderer.invoke('pick-presentation'), // subir PDF/PowerPoint
+  slidesDownload: (url) => ipcRenderer.invoke('slides-download', url), // Google Slides
+  onYtProgress: (cb) => ipcRenderer.on('yt-progress', (_e, m) => cb(m)),
+  ytToggle: () => ipcRenderer.send('yt-toggle'),               // recbar -> main (pausa/play video)
+  ytSeek: (delta) => ipcRenderer.send('yt-seek', delta),       // recbar -> main (regresar/avanzar video)
+  slideNav: (dir) => ipcRenderer.send('slide-nav', dir),       // recbar -> main (anterior/siguiente diapositiva)
+  screenZoom: (delta) => ipcRenderer.send('screen-zoom', delta), // recbar -> main (zoom de pantalla en banda)
+  onYtToggleCmd: (cb) => ipcRenderer.on('yt-toggle-cmd', (_e, playing) => cb(playing)),
+  onYtSeekCmd: (cb) => ipcRenderer.on('yt-seek-cmd', (_e, delta) => cb(delta)),
+  onSlideNavCmd: (cb) => ipcRenderer.on('slide-nav-cmd', (_e, dir) => cb(dir)),
+  onScreenZoomCmd: (cb) => ipcRenderer.on('screen-zoom-cmd', (_e, d) => cb(d)),
+  onYtButton: (cb) => ipcRenderer.on('yt-button', (_e, c) => cb(c)),
 
   // --- Recorder (compositor) ---
   onBeginRecording: (cb) => ipcRenderer.on('begin-recording', (_e, s) => cb(s)),

@@ -375,6 +375,10 @@ html.overlay, body.overlay { background: transparent !important; overflow: hidde
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
+  /* El redondeo se aplica también al propio vídeo: con transform (espejo) en
+     Chromium/Windows el recorte por overflow del contenedor no afecta a los
+     hijos transformados, así que sin esto la cámara se ve cuadrada en vivo. */
+  border-radius: inherit;
   transform: scaleX(-1);          /* efecto espejo, como Loom */
   -webkit-user-select: none;
   pointer-events: none;

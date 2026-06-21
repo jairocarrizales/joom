@@ -2,8 +2,80 @@
 
 const screenVideo = document.getElementById('screen');
 const webcamVideo = document.getElementById('webcam');
+const ytVideo = document.getElementById('ytvideo');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
+
+// YouTube en reel: video servido por el servidor local (http://127.0.0.1).
+let ytUrl = '';          // URL actual cargada
+let ytAudioNode = null;  // nodo de audio del video (se crea una sola vez)
+function loadYt(url) {
+  if (url && url !== ytUrl) {
+    ytUrl = url;
+    ytVideo.src = url;
+    ytVideo.load();
+  } else if (!url && ytUrl) {
+    ytUrl = '';
+    try { ytVideo.removeAttribute('src'); ytVideo.load(); } catch (_) {}
+  }
+}
+const ytReady = () => ytUrl && ytVideo.readyState >= 2;
+
+// Presentación (PDF / Google Slides / PowerPoint convertido) renderizada con pdf.js.
+let mediaKind = 'video';   // 'video' | 'pdf'
+let pdfDoc = null;
+let pdfUrlLoaded = '';
+let pdfPage = 1;
+let pdfNumPages = 0;
+let pdfReady = false;
+const pdfCanvas = document.createElement('canvas');
+const pdfCtx = pdfCanvas.getContext('2d');
+if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.js';
+
+async function loadPdf(url) {
+  if (!url || url === pdfUrlLoaded || !window.pdfjsLib) return;
+  pdfUrlLoaded = url;
+  pdfReady = false;
+  try {
+    pdfDoc = await window.pdfjsLib.getDocument(url).promise;
+    pdfNumPages = pdfDoc.numPages;
+    pdfPage = 1;
+    await renderPdfPage(1);
+  } catch (e) { console.error('PDF load:', e); pdfDoc = null; }
+}
+
+async function renderPdfPage(n) {
+  if (!pdfDoc) return;
+  try {
+    const page = await pdfDoc.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const scale = 1080 / base.width;       // ancho objetivo ~1080
+    const vp = page.getViewport({ scale });
+    pdfCanvas.width = Math.round(vp.width);
+    pdfCanvas.height = Math.round(vp.height);
+    pdfCtx.fillStyle = '#fff'; pdfCtx.fillRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+    await page.render({ canvasContext: pdfCtx, viewport: vp }).promise;
+    pdfReady = true;
+  } catch (e) { console.error('PDF page:', e); }
+}
+
+// Pantalla en banda del reel (con zoom/pan en vivo para resaltar un detalle).
+let screenZoom = 1;        // 1 = 100% (pantalla completa horizontal)
+let screenPanX = 0.5;      // 0..1 (centro) — solo aplica con zoom > 1
+let screenPanY = 0.5;
+let screenOverflowX = 0, screenOverflowY = 0; // px que sobresalen (para mapear el arrastre)
+
+// Carga el contenido del reel: video (ytVideo) o presentación (pdf.js).
+function loadMedia(url, kind) {
+  mediaKind = kind === 'pdf' ? 'pdf' : 'video';
+  if (mediaKind === 'pdf') {
+    loadYt('');             // soltar el video si lo había
+    loadPdf(url);
+  } else {
+    pdfDoc = null; pdfReady = false; pdfUrlLoaded = '';
+    loadYt(url);
+  }
+}
 
 let screenStream = null;
 let webcamStream = null;
@@ -18,7 +90,7 @@ let border = true;     // ¿dibujar borde blanco alrededor de la cámara?
 
 let mode = 'normal';   // 'normal' | 'reel'
 let bandPos = 'bottom';
-let bandHeightFrac = 0.5;
+let bandHeightFrac = 0.30;
 let cropRect = { fx: 0.15, fy: 0.1, fw: 0.7, fh: 0.8 };
 let webcamZoom = 1;    // zoom de la webcam (recorte central uniforme)
 let fullCam = false;   // webcam a pantalla completa (alternable en vivo)
@@ -418,9 +490,10 @@ function render() {
   drawBanner();
 }
 
-// Modo podcast: lienzo 16:9 con pantalla a la izq (~70%) y webcam vertical a la der (~30%).
-// Si está activado el "fondo bonito", se pinta el gradiente alrededor de ambos paneles.
-const PODCAST_CAM_FRAC = 0.30;
+// Modo podcast: lienzo 16:9 con pantalla a la izq (~75%) y webcam vertical a la der (~25%).
+const PODCAST_CAM_FRAC = 0.25;
+let podcastPanX = 0.5;       // 0..1: qué parte horizontal de la pantalla se ve (cover recorta los lados)
+let podcastOverflowX = 0;    // px de pantalla que sobresalen del panel (para mapear el arrastre)
 function drawPodcast() {
   // Respetar el atajo ⌘⇧F: si fullCam está activo, cubrir todo el lienzo con la webcam.
   if (fcStart >= 0) {
@@ -460,10 +533,13 @@ function drawPodcast() {
   ctx.restore();
   if (screenVideo.readyState >= 2) {
     const VW = screenVideo.videoWidth, VH = screenVideo.videoHeight;
-    const s = Math.min(screenW / VW, panelH / VH); // contain (con bandas si difiere)
+    const s = Math.max(screenW / VW, panelH / VH); // cover: llena el panel a alto completo (recorta lados)
     const dw = VW * s, dh = VH * s;
-    const dx = screenX + (screenW - dw) / 2;
-    const dy = panelY + (panelH - dh) / 2;
+    // Lo que sobra a los lados se puede desplazar con la manito (podcastPanX).
+    podcastOverflowX = Math.max(0, dw - screenW);
+    const overflowY = Math.max(0, dh - panelH);
+    const dx = screenX - podcastOverflowX * podcastPanX;
+    const dy = panelY - overflowY * 0.5;
     ctx.save();
     roundRectPath(ctx, screenX, panelY, screenW, panelH, r);
     ctx.clip();
@@ -594,87 +670,52 @@ function drawReel() {
   const W = canvas.width;   // 1080
   const H = canvas.height;  // 1920
 
-  // Modo burbuja: pantalla cover-crop al canvas + cámara como bubble.
-  if (bandPos === 'bubble') {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, W, H);
-    if (screenVideo.readyState >= 2) {
-      const VW = screenVideo.videoWidth, VH = screenVideo.videoHeight;
-      let sx = cropRect.fx * VW, sy = cropRect.fy * VH, sw = cropRect.fw * VW, sh = cropRect.fh * VH;
-      const want = W / H;
-      if (sw / sh > want) { const n = sh * want; sx += (sw - n) / 2; sw = n; }
-      else { const n = sw / want; sy += (sh - n) / 2; sh = n; }
-      try { ctx.drawImage(screenVideo, sx, sy, sw, sh, 0, 0, W, H); } catch (_) {}
-    }
-    drawWebcam(); // burbuja con su forma; usa cropRect para remapear posición
-    // Banner del reel (título/pie/junto a la cámara — pero en burbuja no hay "cámara fija", trato 'camera' como junto a la burbuja real no aplica → solo respetamos top/bottom)
-    const hasHeadline = !!(reelHeadline && reelHeadline.text);
-    if (hasHeadline) {
-      const layout = reelHeadlineLayout(W, H);
-      const stripH = Math.min(layout.h, H);
-      let bannerY;
-      if (reelHeadlinePos === 'top') bannerY = 0;
-      else if (reelHeadlinePos === 'bottom') bannerY = H - stripH;
-      else bannerY = H - stripH; // 'camera' en burbuja → fallback al pie
-      drawReelHeadlineStrip(W, bannerY, layout);
-    }
-    return;
-  }
-
-  let bandH = Math.round((H * bandHeightFrac) / 2) * 2;
-  if (bandH > H) bandH = H;
-  const zoneH = H - bandH;
-  const bandY = bandPos === 'top' ? 0 : zoneH;
-  const zoneY = bandPos === 'top' ? bandH : 0;
-
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
 
-  // Pantalla: ocupa toda el área no-cámara
-  if (zoneH > 0 && screenVideo.readyState >= 2) {
-    const VW = screenVideo.videoWidth;
-    const VH = screenVideo.videoHeight;
-    let sx = cropRect.fx * VW;
-    let sy = cropRect.fy * VH;
-    let sw = cropRect.fw * VW;
-    let sh = cropRect.fh * VH;
-    const want = W / zoneH;
-    if (sw / sh > want) { const n = sh * want; sx += (sw - n) / 2; sw = n; }
-    else { const n = sw / want; sy += (sh - n) / 2; sh = n; }
-    try { ctx.drawImage(screenVideo, sx, sy, sw, sh, 0, zoneY, W, zoneH); } catch (_) {}
-  }
-
-  // Cámara (tamaño completo)
-  if (webcamVideo.readyState >= 2) {
-    coverDrawMirrored(webcamVideo, 0, bandY, W, bandH);
-  }
-
-  // Banner: posición según reelHeadlinePos.
-  //   'top'    → título del video (y=0, puede pisar lo que haya arriba)
-  //   'bottom' → pie del video (y=H-stripH, puede pisar lo que haya abajo)
-  //   'camera' → overlay sobre la pantalla con offset; nunca toca la cámara
-  const hasHeadline = !!(reelHeadline && reelHeadline.text);
-  if (hasHeadline && !(reelHeadlinePos === 'camera' && zoneH === 0)) {
-    const layout = reelHeadlineLayout(W, H);
-    const stripH = Math.min(layout.h, H);
-    let bannerY;
-    if (reelHeadlinePos === 'top') {
-      bannerY = 0;
-    } else if (reelHeadlinePos === 'bottom') {
-      bannerY = H - stripH;
+  const ytMode = (bandPos === 'youtube-top' || bandPos === 'youtube-pie');
+  const screenMode = (bandPos === 'screen-top' || bandPos === 'screen-pie');
+  if (ytMode || screenMode) {
+    const ytH = Math.round(W * 9 / 16);          // banda 16:9 a ancho completo (1080 -> 608)
+    const camH = H - ytH;
+    const top = (bandPos === 'youtube-top' || bandPos === 'screen-top'); // contenido arriba
+    const ytY = top ? 0 : camH;
+    const camY = top ? ytH : 0;
+    // Cámara llena su área (cover + espejo)
+    if (webcamVideo.readyState >= 2) coverDrawMirrored(webcamVideo, 0, camY, W, camH);
+    // Banda de contenido
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, ytY, W, ytH); ctx.clip();
+    ctx.fillStyle = '#000'; ctx.fillRect(0, ytY, W, ytH);
+    if (screenMode) {
+      // Pantalla: cover a la banda (a zoom 1 = 100% horizontal, exacto). Con zoom>1
+      // magnifica y se puede desplazar (pan) para resaltar un detalle.
+      if (screenVideo.readyState >= 2) {
+        const vw = screenVideo.videoWidth, vh = screenVideo.videoHeight;
+        const base = Math.max(W / vw, ytH / vh);
+        const s = base * screenZoom;
+        const dw = vw * s, dh = vh * s;
+        screenOverflowX = Math.max(0, dw - W);
+        screenOverflowY = Math.max(0, dh - ytH);
+        const dx = 0 - screenOverflowX * screenPanX;
+        const dy = ytY - screenOverflowY * screenPanY;
+        try { ctx.drawImage(screenVideo, dx, dy, dw, dh); } catch (_) {}
+      }
     } else {
-      // 'camera': pegado a la cámara con offset
-      const offsetCap = Math.max(0, zoneH - stripH);
-      const off = Math.max(0, Math.min(0.6, reelHeadlineOffset || 0));
-      const offsetPx = Math.round(off * offsetCap);
-      if (bandPos === 'top') bannerY = bandH + offsetPx;
-      else bannerY = bandY - stripH - offsetPx;
+      // Video o diapositiva: contain (sin distorsión ni espejo)
+      let src = null, sw = 0, sh = 0;
+      if (mediaKind === 'pdf' && pdfReady && pdfCanvas.width) { src = pdfCanvas; sw = pdfCanvas.width; sh = pdfCanvas.height; }
+      else if (mediaKind === 'video' && ytReady()) { src = ytVideo; sw = ytVideo.videoWidth; sh = ytVideo.videoHeight; }
+      if (src && sw && sh) {
+        const s = Math.min(W / sw, ytH / sh);
+        const dw = sw * s, dh = sh * s, dx = (W - dw) / 2, dy = ytY + (ytH - dh) / 2;
+        try { ctx.drawImage(src, dx, dy, dw, dh); } catch (_) {}
+      }
     }
-    drawReelHeadlineStrip(W, bannerY, layout);
-  } else if (zoneH > 0) {
-    // Divisor sutil si no hay banner
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(0, bandPos === 'top' ? bandH - 1 : zoneH - 1, W, 2);
+    ctx.restore();
+  } else {
+    // 100% cámara
+    if (webcamVideo.readyState >= 2) coverDrawMirrored(webcamVideo, 0, 0, W, H);
   }
 }
 
@@ -705,6 +746,15 @@ function buildAudioTrack() {
   sfxDest = audioCtx.createMediaStreamDestination();
   if (micTracks.length) audioCtx.createMediaStreamSource(new MediaStream(micTracks)).connect(sfxDest);
   if (sysTracks.length) audioCtx.createMediaStreamSource(new MediaStream(sysTracks)).connect(sfxDest);
+  // Audio del video de YouTube (reel): tomamos su pista vía captureStream (no
+  // reenruta la salida del elemento, así que también se oye por los altavoces)
+  // y la mezclamos dentro de la grabación.
+  if (mode === 'reel' && mediaKind === 'video' && (bandPos === 'youtube-top' || bandPos === 'youtube-pie') && ytUrl && ytVideo.captureStream) {
+    try {
+      const ytAudio = ytVideo.captureStream().getAudioTracks();
+      if (ytAudio.length) audioCtx.createMediaStreamSource(new MediaStream(ytAudio)).connect(sfxDest);
+    } catch (_) {}
+  }
   return sfxDest.stream.getAudioTracks()[0];
 }
 
@@ -748,6 +798,7 @@ function applyReelSettings(settings) {
   if (settings.bubbleLockedRect !== undefined) bubbleLockedRect = settings.bubbleLockedRect;
   if (settings.cropRect) cropRect = settings.cropRect;
   if (typeof settings.zoom === 'number') webcamZoom = settings.zoom;
+  if (typeof settings.ytUrl === 'string') loadMedia(settings.ytUrl, settings.mediaKind);
   niceBg = settings.niceBg === true && (mode === 'normal' || mode === 'podcast');
   if (settings.bgPreset) bgPreset = settings.bgPreset;
   if (typeof settings.padFrac === 'number') padFrac = settings.padFrac;
@@ -860,6 +911,13 @@ async function begin(settings) {
       });
     }
 
+    // Reel + video: arrancar desde el inicio al empezar a grabar (las diapositivas
+    // son estáticas, no necesitan reproducción).
+    if (mode === 'reel' && mediaKind === 'video' && (bandPos === 'youtube-top' || bandPos === 'youtube-pie') && ytUrl) {
+      try { ytVideo.currentTime = 0; } catch (_) {}
+      ytVideo.play().catch(() => {});
+    }
+
     const canvasStream = canvas.captureStream(fps);
     const combined = new MediaStream();
     canvasStream.getVideoTracks().forEach((t) => combined.addTrack(t));
@@ -897,6 +955,7 @@ async function begin(settings) {
 function stopRecordingStreams() {
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; sfxDest = null; }
+  try { ytVideo.pause(); } catch (_) {}
   mediaRecorder = null;
   if (!previewing) cleanupStreams();
 }
@@ -932,6 +991,34 @@ window.loom.onReelParams((p) => {
   if (typeof p.border === 'boolean') border = p.border;
   if (typeof p.bubbleLocked === 'boolean') bubbleLocked = p.bubbleLocked;
   if (p.bubbleLockedRect !== undefined) bubbleLockedRect = p.bubbleLockedRect;
+  if (typeof p.ytUrl === 'string') loadMedia(p.ytUrl, p.mediaKind || mediaKind);
+});
+
+// Pausar/reanudar el video (desde la barra durante la grabación).
+window.loom.onYtToggleCmd((playing) => {
+  if (playing) ytVideo.play().catch(() => {});
+  else ytVideo.pause();
+});
+
+// Regresar/avanzar el video N segundos.
+window.loom.onYtSeekCmd((delta) => {
+  try {
+    const dur = isFinite(ytVideo.duration) ? ytVideo.duration : Infinity;
+    ytVideo.currentTime = Math.max(0, Math.min(dur, (ytVideo.currentTime || 0) + (Number(delta) || 0)));
+  } catch (_) {}
+});
+
+// Diapositiva anterior/siguiente (presentación).
+window.loom.onSlideNavCmd((dir) => {
+  if (mediaKind !== 'pdf' || !pdfNumPages) return;
+  const n = Math.max(1, Math.min(pdfNumPages, pdfPage + (dir === 'next' ? 1 : -1)));
+  if (n !== pdfPage) { pdfPage = n; renderPdfPage(n); }
+});
+
+// Zoom de la pantalla en banda (desde la barra: + / -).
+window.loom.onScreenZoomCmd((delta) => {
+  screenZoom = Math.max(1, Math.min(5, screenZoom * (delta > 0 ? 1.25 : 0.8)));
+  if (screenZoom === 1) { screenPanX = 0.5; screenPanY = 0.5; }
 });
 
 // --- Ajuste de la zona desde la vista previa (arrastrar + zoom) ---------------
@@ -954,42 +1041,41 @@ function pushCrop() {
 
 let panning = null;
 window.addEventListener('mousedown', (e) => {
-  if (mode !== 'reel') return;
+  if (mode !== 'reel' && mode !== 'podcast') return;
   panning = { x: e.clientX, y: e.clientY };
   document.body.style.cursor = 'grabbing';
 });
 window.addEventListener('mousemove', (e) => {
-  if (!panning || mode !== 'reel') return;
-  const sc = previewScale() || 1;
-  const cdx = (e.clientX - panning.x) / sc; // px de canvas
-  const cdy = (e.clientY - panning.y) / sc;
-  panning = { x: e.clientX, y: e.clientY };
-  // En modo burbuja no hay banda: la zona ocupa todo el canvas.
-  const bandH = bandPos === 'bubble' ? 0 : Math.round((1920 * bandHeightFrac) / 2) * 2;
-  const zoneH = 1920 - bandH;
-  if (zoneH <= 0) return; // safety: evita div-por-0 si la cámara ocupa 100%
-  cropRect.fx = clamp(cropRect.fx - (cdx / 1080) * cropRect.fw, 0, 1 - cropRect.fw);
-  cropRect.fy = clamp(cropRect.fy - (cdy / zoneH) * cropRect.fh, 0, 1 - cropRect.fh);
-  pushCrop();
+  if (!panning) return;
+  if (mode === 'podcast') {
+    // Arrastrar la pantalla horizontalmente para ver las zonas recortadas.
+    const sc = Math.min(window.innerWidth / 1920, window.innerHeight / 1080) || 1;
+    const cdx = (e.clientX - panning.x) / sc; // px de canvas
+    panning = { x: e.clientX, y: e.clientY };
+    if (podcastOverflowX > 0) {
+      podcastPanX = clamp(podcastPanX - cdx / podcastOverflowX, 0, 1);
+    }
+    return;
+  }
+  if (mode !== 'reel') return;
+  // Reel con pantalla en banda: arrastrar mueve la vista cuando hay zoom (>1).
+  if (bandPos === 'screen-top' || bandPos === 'screen-pie') {
+    const sc = previewScale() || 1;
+    const cdx = (e.clientX - panning.x) / sc;
+    const cdy = (e.clientY - panning.y) / sc;
+    panning = { x: e.clientX, y: e.clientY };
+    if (screenOverflowX > 0) screenPanX = clamp(screenPanX - cdx / screenOverflowX, 0, 1);
+    if (screenOverflowY > 0) screenPanY = clamp(screenPanY - cdy / screenOverflowY, 0, 1);
+  }
 });
 window.addEventListener('mouseup', () => {
   if (panning) { panning = null; document.body.style.cursor = 'grab'; }
 });
 
-// Rueda = zoom. Aplica UN solo factor a ancho y alto (preserva la proporción),
-// limitándolo para que ninguno se salga de [0.12, 1] -> nunca se deforma.
+// Rueda del ratón sobre la previa = zoom de la pantalla en banda (reel).
 window.addEventListener('wheel', (e) => {
-  if (mode !== 'reel') return;
+  if (mode !== 'reel' || !(bandPos === 'screen-top' || bandPos === 'screen-pie')) return;
   e.preventDefault();
-  let f = e.deltaY > 0 ? 1.06 : 0.94; // abajo = alejar (zona más grande)
-  const maxF = Math.min(1 / cropRect.fw, 1 / cropRect.fh);          // tope: ningún lado > 1
-  const minF = Math.max(0.12 / cropRect.fw, 0.12 / cropRect.fh);    // piso: ningún lado < 0.12
-  f = clamp(f, minF, maxF);
-  const nfw = cropRect.fw * f;
-  const nfh = cropRect.fh * f;
-  cropRect.fx = clamp(cropRect.fx + (cropRect.fw - nfw) / 2, 0, 1 - nfw);
-  cropRect.fy = clamp(cropRect.fy + (cropRect.fh - nfh) / 2, 0, 1 - nfh);
-  cropRect.fw = nfw;
-  cropRect.fh = nfh;
-  pushCrop();
+  screenZoom = clamp(screenZoom * (e.deltaY < 0 ? 1.12 : 0.89), 1, 5);
+  if (screenZoom === 1) { screenPanX = 0.5; screenPanY = 0.5; }
 }, { passive: false });

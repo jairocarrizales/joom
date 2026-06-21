@@ -25,6 +25,16 @@
     <div class="main">
       <h1><span class="dot"></span> Joom</h1>
 
+      <!-- Acciones siempre visibles (no dependen de la pestaña activa) -->
+      <div id="topActions" style="display:flex; gap:8px; align-items:stretch; margin-bottom:10px;">
+        <button id="startBtn" class="btn btn-rec" title="Grabar (Ctrl+Shift+R)" style="flex:0 0 46px; width:46px; height:46px; margin:0; padding:0; border-radius:12px; display:flex; align-items:center; justify-content:center;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="#fff" stroke="none"><circle cx="12" cy="12" r="7"/></svg>
+        </button>
+        <button id="tpBtn" class="btn btn-ghost icon-btn" title="Teleprompter" style="flex:0 0 46px; width:46px; height:46px; margin:0; padding:0; display:flex; align-items:center; justify-content:center;">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1h-9a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>
+        </button>
+      </div>
+
       <!-- Configuración (visible antes de grabar) -->
       <div id="setup">
 
@@ -52,11 +62,9 @@
               <option value="1080-60">Fluida — 1080p · 60fps</option>
               <option value="1440">Máxima — 1440p · 30fps</option>
             </select>
-            <label class="check" style="margin-top:6px"><input type="checkbox" id="livePreviewChk" /> Vista previa en vivo (consume más)</label>
           </div>
 
-          <button id="startBtn" class="btn btn-rec">● Grabar</button>
-          <p class="hint">Al grabar aparece una barra flotante con los controles (pausar, detener y anotaciones para presentar). El panel se oculta mientras grabas.</p>
+          <p class="hint">Al grabar (botón ● Grabar de arriba) aparece una barra flotante con los controles (pausar, detener y anotaciones). El panel se oculta mientras grabas. El 📜 Teleprompter es un guion flotante que NO sale en el video y funciona en cualquier modo.</p>
           <p class="hint">Atajos: Ctrl+Shift+R grabar/detener · Ctrl+Shift+P pausar · Ctrl+Shift+A anotaciones · Ctrl+Shift+L láser · Ctrl+Shift+C confeti</p>
         </div>
 
@@ -80,7 +88,8 @@
 
           <div class="field">
             <label>Zoom de cámara: <span id="zoomLbl">100%</span></label>
-            <input type="range" id="zoomRange" min="100" max="220" value="100" />
+            <input type="range" id="zoomRange" min="50" max="220" value="100" />
+            <p class="sublabel">Menos de 100% = alejar (útil en podcast para verte más completo).</p>
           </div>
 
           <div class="field">
@@ -94,49 +103,31 @@
         <div class="tab-panel" data-panel="reel">
           <div id="reelOpts">
             <div class="field">
-              <label>Cámara (banda)</label>
+              <label>Diseño del reel</label>
               <select id="bandPosSel">
-                <option value="bottom">Banda abajo</option>
-                <option value="top">Banda arriba</option>
-                <option value="bubble">● Burbuja flotante (movible)</option>
                 <option value="full">Solo cámara (100%)</option>
+                <option value="youtube-top">Video arriba + cámara abajo</option>
+                <option value="youtube-pie">Cámara arriba + Video abajo</option>
+                <option value="screen-top">Pantalla arriba + cámara abajo</option>
+                <option value="screen-pie">Cámara arriba + Pantalla abajo</option>
               </select>
             </div>
-            <div class="field" id="bandHField">
-              <label>Alto de la cámara: <span id="bandHLbl">50%</span></label>
-              <input type="range" id="bandHRange" min="15" max="70" value="50" />
-            </div>
-            <button id="zoneBtn" class="btn btn-ghost">▭ Ajustar zona de pantalla</button>
-            <div class="field" id="bubbleSizeField" style="margin-top:8px">
-              <label class="sublabel">Tamaño de la burbuja en el video: <span id="bubbleSizeLbl">automático</span></label>
-              <input type="range" id="bubbleSizeRange" min="0" max="50" value="0" />
-              <label class="check" id="bubbleLockField" style="margin-top:6px"><input type="checkbox" id="bubbleLockChk" /> 🔒 Bloquear posición de la cámara</label>
-            </div>
-            <p class="hint">La cámara va en una banda; la pantalla se recorta a la “zona” que elijas. Al 100% queda solo la cámara (reel vertical). Resultado 1080×1920.</p>
-            <div class="field" id="reelHeadlineField" style="column-span:all">
-              <label>Banner / Texto del video (opcional)</label>
-              <input type="text" id="reelHeadlineTxt" placeholder="Ej: EL NEGOCIO QUE FACTURA MILLONES..." />
-              <input type="text" id="reelHeadlineTxt2" placeholder="Texto alterno (opcional, anima entre los dos)" style="margin-top:6px" />
-              <label class="check" style="margin-top:6px"><input type="checkbox" id="reelHeadlineAnim" /> Animar texto (1 texto = bucle; 2 textos = alternan, 10s entre uno y otro)</label>
-              <div style="margin-top:8px">
-                <div class="sublabel" style="margin-bottom:4px">Color del texto</div>
-                <div id="hlFgSwatches" class="csw-row"></div>
-                <input type="text" id="reelHeadlineFg" value="#ffffff" maxlength="7" style="width:96px;font-size:11px;margin-top:4px" />
+
+            <div class="field" id="ytField" style="display:none">
+              <label>Contenido (video o presentación)</label>
+              <input type="text" id="ytUrl" placeholder="URL de YouTube…" />
+              <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">
+                <button id="ytDownloadBtn" class="btn btn-ghost" style="flex:1; min-width:96px; margin:0;">⬇ YouTube</button>
+                <button id="ytUploadBtn" class="btn btn-ghost" style="flex:1; min-width:96px; margin:0;">📁 Video PC</button>
+                <button id="ytPresBtn" class="btn btn-ghost" style="flex:1; min-width:96px; margin:0;">📑 PDF / PowerPoint</button>
               </div>
-              <div style="margin-top:8px">
-                <div class="sublabel" style="margin-bottom:4px">Color del fondo</div>
-                <div id="hlBgSwatches" class="csw-row"></div>
-                <input type="text" id="reelHeadlineBg" value="#000000" maxlength="7" style="width:96px;font-size:11px;margin-top:4px" />
-              </div>
-              <label class="sublabel" style="margin-top:6px">Ubicación</label>
-              <select id="reelHeadlinePosSel">
-                <option value="camera">Junto a la cámara</option>
-                <option value="top">Título (arriba de todo el video)</option>
-                <option value="bottom">Pie (abajo de todo el video)</option>
-              </select>
-              <label class="sublabel" id="reelHeadlineOffsetLblWrap" style="margin-top:6px">Distancia a la cámara: <span id="reelHeadlineOffsetLbl">0%</span></label>
-              <input type="range" id="reelHeadlineOffset" min="0" max="60" value="0" />
+              <input type="text" id="slidesUrl" placeholder="URL de Google Slides (compartida públicamente)…" style="margin-top:6px" />
+              <button id="slidesBtn" class="btn btn-ghost" style="margin-top:6px">🖼 Cargar Google Slides</button>
+              <p id="ytStatus" class="hint"></p>
+              <p class="sublabel">El contenido ocupa el 100% del ancho y la cámara llena el resto. Durante la grabación: <b>video</b> → pausar/regresar; <b>presentación</b> → anterior/siguiente (una diapositiva a la vez). El PowerPoint se convierte con tu PowerPoint instalado.</p>
             </div>
+
+            <p class="hint">Reel vertical 1080×1920.</p>
           </div>
         </div>
       </div>
