@@ -681,14 +681,16 @@ function drawReel() {
 // --- Elegir mimeType de grabación -------------------------------------------
 
 function pickMime() {
-  // Preferir H.264 (acelerado por hardware en Mac) y evitar VP9 (pesado en CPU,
-  // lo que provoca audio entrecortado al saturar el codificador).
+  // En Windows, grabar directamente en MP4 con MediaRecorder a veces descarta
+  // la pista de audio (vídeo perfecto pero mudo). Preferimos WebM, que incluye
+  // el audio de forma fiable; ffmpeg convierte luego a MP4 (H.264 + AAC).
+  // Evitamos VP9 (pesado en CPU -> audio entrecortado al saturar el codificador).
   const candidates = [
-    'video/mp4;codecs=h264,aac',
-    'video/mp4',
     'video/webm;codecs=h264,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm',
+    'video/mp4;codecs=h264,aac',
+    'video/mp4',
   ];
   return candidates.find((c) => MediaRecorder.isTypeSupported(c)) || 'video/webm';
 }
