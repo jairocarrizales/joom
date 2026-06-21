@@ -1,0 +1,976 @@
+'use strict';
+
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  desktopCapturer,
+  session,
+  screen,
+  systemPreferences,
+  dialog,
+  shell,
+  globalShortcut,
+} = require('electron');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
+
+// ffmpeg empaquetado (ffmpeg-static trae ffmpeg.exe en Windows); si no, el del PATH.
+let ffmpegPath = null;
+try {
+  ffmpegPath = require('ffmpeg-static');
+} catch (_) {
+  ffmpegPath = null;
+}
+// En la app empaquetada, ffmpeg-static queda fuera del asar (asarUnpack).
+if (ffmpegPath) ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
+if (!ffmpegPath || !fs.existsSync(ffmpegPath)) ffmpegPath = 'ffmpeg';
+
+// --- Estado global -----------------------------------------------------------
+
+let controlWindow = null;   // Panel de control (UI principal)
+let overlayWindow = null;   // Burbuja flotante de la webcam
+let recorderWindow = null;  // Ventana oculta que compone y graba
+let annotateWindow = null;  // Capa de anotaciones a pantalla completa
+let recbarWindow = null;    // Barra unificada de grabación (controles + anotaciones)
+
+let annotTool = 'none';     // 'none' | 'rect' | 'arrow' | 'laser' | 'number'
+let annotColor = '#ff3b30';
+let annotWidth = 4;         // grosor de línea (flecha/rectángulo)
+let annotNumBg = '#0a84ff'; // fondo de los números (círculo)
+const annotNumFont = '#ffffff'; // texto de los números (siempre blanco)
+let annotationsOpen = false;
+let isRecording = false;
+
+let selectedSource = null;  // Fuente de pantalla elegida por el usuario (desktopCapturer)
+let tempFilePath = null;    // Archivo temporal mientras se graba
+let writeStream = null;     // Stream de escritura del temporal
+let recIsMp4 = false;       // ¿El grabador ya produjo MP4 (H.264)?
+
+let cameraId = '';          // Cámara seleccionada
+let cameraShape = 'circle'; // 'circle' | 'vertical' | 'wide' | 'none'
+let cameraBorder = true;    // ¿borde blanco alrededor de la cámara?
+let webcamZoom = 1;         // zoom de la webcam (recorte central uniforme)
+let systemAudio = false;    // ¿capturar también el audio del sistema?
+
+// Modo reel vertical (9:16)
+let recMode = 'normal';     // 'normal' | 'reel' | 'podcast'
+let bandPos = 'bottom';     // 'top' | 'bottom' | 'bubble' (banda de la webcam en reel)
+let bandHeightFrac = 0.5;   // alto de la banda respecto a 1920 (50% por defecto = mitad y mitad)
+let cropRect = { fx: 0.15, fy: 0.1, fw: 0.7, fh: 0.8 }; // zona de pantalla (reel)
+let reelHeadline = { text: '', text2: '', fg: '#ffffff', bg: '#000000', animate: false }; // banner central del reel
+let reelHeadlineOffset = 0; // 0..0.60 distancia del banner a la cámara (overlay sobre la zona de pantalla)
+let reelHeadlinePos = 'camera'; // 'camera' | 'top' | 'bottom' (título/pie del video completo)
+let bubbleSizeFrac = 0;     // 0 = auto (tamaño on-screen), >0 = ancho como % del canvas (reel+bubble)
+let bubbleLocked = false;   // si true: la burbuja queda fija en el canvas y no se mueve aunque el usuario arrastre la zona/pantalla
+let bubbleLockedRect = null; // {fx, fy, fw, fh} en fracciones del canvas, capturadas al bloquear
+let regionWindow = null;    // selector de zona
+
+// Aspecto (ancho/alto) de la zona/área de pantalla en modo reel.
+function zoneAspect() {
+  const z = 1920 * (1 - bandHeightFrac);
+  return z > 1 ? 1080 / z : 1;
+}
+const isFullCam = () => bandHeightFrac >= 0.98; // cámara ocupa todo (sin pantalla)
+
+// Relación alto/ancho de la burbuja según la forma.
+function aspectFor(shape) {
+  // h/w → vertical 9:16 (1.778), círculo 1:1, wide 16:9 (0.5625)
+  if (shape === 'vertical') return 16 / 9;
+  if (shape === 'wide') return 9 / 16;
+  return 1;
+}
+
+function defaultWidthFor(shape) {
+  if (shape === 'vertical') return 200;
+  if (shape === 'wide') return 320;
+  return 220;
+}
+
+// --- Creación de ventanas ----------------------------------------------------
+
+function createControlWindow() {
+  controlWindow = new BrowserWindow({
+    width: 780,
+    height: 720,
+    // Alto fijo: el contenido de las pestañas grandes scrollea dentro de .main
+    // en vez de hacer saltar la ventana al cambiar entre pestañas. resize-control
+    // solo se invoca para estados compactos (grabando, exportando).
+    useContentSize: true,
+    resizable: false,
+    fullscreenable: false,
+    title: 'Joom',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  controlWindow.loadFile(path.join(__dirname, 'renderer', 'control.html'));
+  // Nuestra propia UI nunca debe aparecer en la grabación.
+  controlWindow.setContentProtection(true);
+
+  controlWindow.on('closed', () => {
+    controlWindow = null;
+    // Cerrar TODAS las ventanas auxiliares al cerrar el panel.
+    if (overlayWindow) overlayWindow.close();
+    if (recorderWindow) recorderWindow.close();
+    if (annotateWindow) annotateWindow.close();
+    if (recbarWindow) recbarWindow.close();
+    if (regionWindow) regionWindow.close();
+    app.quit();
+  });
+}
+
+function createOverlayWindow(initRect = null) {
+  if (overlayWindow) return;
+  const display = screen.getPrimaryDisplay();
+  const width = (initRect && initRect.width) || defaultWidthFor(cameraShape);
+  const height = (initRect && initRect.height) || Math.round(width * aspectFor(cameraShape));
+  const initX = (initRect && initRect.x !== undefined) ? initRect.x : (display.workArea.x + 40);
+  const initY = (initRect && initRect.y !== undefined) ? initRect.y : (display.workArea.y + display.workArea.height - height - 40);
+  overlayWindow = new BrowserWindow({
+    width,
+    height,
+    x: initX,
+    y: initY,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: true,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    minWidth: 80,
+    minHeight: 80,
+    maxWidth: 600,
+    maxHeight: 700,
+    fullscreenable: false,
+    maximizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+  // CLAVE: excluye la burbuja de la captura para no grabarla dos veces
+  // (la flotante nativa + la compuesta en el canvas).
+  overlayWindow.setContentProtection(true);
+
+  overlayWindow.loadFile(path.join(__dirname, 'renderer', 'overlay.html'));
+
+  // Enviar la configuración (cámara + forma + borde) cuando la ventana esté lista.
+  overlayWindow.webContents.once('did-finish-load', () => {
+    overlayWindow.webContents.send('overlay-config', { cameraId, shape: cameraShape, border: cameraBorder, zoom: webcamZoom });
+    sendWebcamRect();
+  });
+
+  // Avisar de la posición al mover/redimensionar (la forma se mantiene en overlay-resize).
+  overlayWindow.on('move', sendWebcamRect);
+  overlayWindow.on('resize', sendWebcamRect);
+
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+  });
+}
+
+function createRecorderWindow() {
+  recorderWindow = new BrowserWindow({
+    width: 300,
+    height: 534,            // 9:16 para la vista previa del reel
+    show: false,            // oculta en modo normal; visible como preview en reel
+    frame: false,
+    resizable: false,
+    skipTaskbar: true,
+    fullscreenable: false,
+    maximizable: false,
+    backgroundColor: '#000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      backgroundThrottling: false, // no ralentizar el RAF cuando está oculta
+    },
+  });
+  recorderWindow.setContentProtection(true); // la preview no debe salir en el video
+  recorderWindow.loadFile(path.join(__dirname, 'renderer', 'recorder.html'));
+  recorderWindow.on('closed', () => {
+    recorderWindow = null;
+  });
+}
+
+// --- Selector de zona (modo reel) --------------------------------------------
+
+let regionOpen = false;
+
+function createRegionWindow() {
+  if (regionWindow) return;
+  const b = screen.getPrimaryDisplay().bounds;
+  regionWindow = new BrowserWindow({
+    x: b.x, y: b.y, width: b.width, height: b.height,
+    frame: false, transparent: true, hasShadow: false,
+    resizable: false, movable: false, skipTaskbar: true,
+    alwaysOnTop: true, enableLargerThanScreen: true, fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  regionWindow.setAlwaysOnTop(true, 'floating');
+  regionWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  regionWindow.setContentProtection(true); // es UI: no debe salir en la grabación
+  regionWindow.loadFile(path.join(__dirname, 'renderer', 'region.html'));
+  regionWindow.webContents.once('did-finish-load', () => {
+    regionWindow.webContents.send('zone-config', { aspect: zoneAspect(), rect: cropRect });
+  });
+  regionWindow.on('closed', () => { regionWindow = null; });
+}
+
+function openRegion(on) {
+  regionOpen = !!on;
+  if (on) { createRegionWindow(); regionWindow.show(); }
+  else if (regionWindow) regionWindow.hide();
+  updateControlZ();
+}
+
+// --- Vista previa en vivo del reel (ventana vertical) ------------------------
+
+function reelPreviewSettings() {
+  return {
+    mode: 'reel', cameraId, bandPos, bandHeightFrac, cropRect, zoom: webcamZoom,
+    shape: cameraShape, border: cameraBorder,
+    reelHeadline, reelHeadlineOffset, reelHeadlinePos, bubbleSizeFrac,
+    bubbleLocked, bubbleLockedRect,
+    systemAudio: false,
+  };
+}
+
+function showReelPreview() {
+  if (!recorderWindow) createRecorderWindow();
+  const d = screen.getPrimaryDisplay();
+  const w = 300, h = 534;
+  recorderWindow.setBounds({
+    x: d.workArea.x + d.workArea.width - w - 20,
+    y: d.workArea.y + 20,
+    width: w, height: h,
+  });
+  recorderWindow.setAlwaysOnTop(true, 'floating');
+  recorderWindow.showInactive();
+  const send = () => recorderWindow.webContents.send('start-preview', reelPreviewSettings());
+  if (recorderWindow.webContents.isLoading()) recorderWindow.webContents.once('did-finish-load', send);
+  else send();
+}
+
+function hideReelPreview() {
+  if (recorderWindow) {
+    recorderWindow.webContents.send('stop-preview');
+    recorderWindow.hide();
+  }
+}
+
+// Vista previa en vivo (normal/podcast) durante la grabación: muestra el compositor
+// (content-protected, no sale en el video) abajo a la derecha.
+function showRecPreview() {
+  if (!recorderWindow) return;
+  const d = screen.getPrimaryDisplay();
+  const sz = d.size;
+  let aspect;
+  if (recMode === 'podcast') aspect = 16 / 9; // lienzo fijo 1920×1080
+  else aspect = sz.width / sz.height;
+  if (!isFinite(aspect) || aspect <= 0) aspect = 16 / 9;
+  const w = 360;
+  const h = Math.max(120, Math.round(w / aspect));
+  recorderWindow.setBounds({
+    x: d.workArea.x + d.workArea.width - w - 20,
+    y: d.workArea.y + d.workArea.height - h - 20,
+    width: w, height: h,
+  });
+  recorderWindow.setAlwaysOnTop(true, 'screen-saver');
+  recorderWindow.showInactive();
+}
+
+function sendReelParams() {
+  if (recMode === 'reel' && recorderWindow) {
+    recorderWindow.webContents.send('reel-params', { bandPos, bandHeightFrac, cropRect, zoom: webcamZoom, reelHeadline, reelHeadlineOffset, reelHeadlinePos, bubbleSizeFrac, shape: cameraShape, border: cameraBorder, bubbleLocked, bubbleLockedRect });
+  }
+}
+
+// --- Ventanas de anotación ---------------------------------------------------
+
+function createAnnotateWindow() {
+  if (annotateWindow) return;
+  const b = screen.getPrimaryDisplay().bounds;
+  annotateWindow = new BrowserWindow({
+    x: b.x, y: b.y, width: b.width, height: b.height,
+    frame: false, transparent: true, hasShadow: false,
+    resizable: false, movable: false, skipTaskbar: true,
+    alwaysOnTop: true, enableLargerThanScreen: true, fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  annotateWindow.setAlwaysOnTop(true, 'floating');
+  annotateWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  annotateWindow.setIgnoreMouseEvents(true, { forward: true });
+  // SIN content protection: queremos que las anotaciones salgan en la grabación.
+  annotateWindow.loadFile(path.join(__dirname, 'renderer', 'annotate.html'));
+  annotateWindow.webContents.once('did-finish-load', () => {
+    annotateWindow.webContents.send('annot-config', annotConfig());
+  });
+  annotateWindow.on('closed', () => { annotateWindow = null; });
+}
+
+// Barra unificada de grabación (controles + anotaciones), aparece al grabar.
+function createRecbarWindow() {
+  if (recbarWindow) return;
+  const d = screen.getPrimaryDisplay();
+  const w = 280, h = 56;
+  recbarWindow = new BrowserWindow({
+    width: w, height: h,
+    x: Math.round(d.workArea.x + (d.workArea.width - w) / 2),
+    y: d.workArea.y + 16,
+    frame: false, transparent: true, hasShadow: false,
+    resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true,
+    fullscreenable: false, maximizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  recbarWindow.setAlwaysOnTop(true, 'screen-saver');
+  recbarWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  recbarWindow.setContentProtection(true); // la barra no debe salir en el video
+  recbarWindow.loadFile(path.join(__dirname, 'renderer', 'recbar.html'));
+  recbarWindow.on('closed', () => { recbarWindow = null; });
+}
+
+// Traer la burbuja de la cámara al frente (si quedó tapada/fuera de pantalla).
+ipcMain.on('raise-camera', () => raiseOverlay());
+
+// La recbar pide ajustar su ancho al contenido (compacta/expandida), centrada.
+ipcMain.on('recbar-resize', (_e, width) => {
+  if (!recbarWindow) return;
+  const d = screen.getPrimaryDisplay();
+  const w = Math.max(200, Math.min(1100, Math.round(width)));
+  const b = recbarWindow.getBounds();
+  recbarWindow.setBounds({ x: Math.round(d.workArea.x + (d.workArea.width - w) / 2), y: b.y, width: w, height: b.height });
+});
+
+// Click-through según la herramienta: el láser deja pasar clics (sigue el
+// cursor con forward), el rectángulo captura el ratón para dibujar.
+function annotConfig() {
+  return { tool: annotTool, color: annotColor, width: annotWidth, numBg: annotNumBg, numFont: annotNumFont };
+}
+
+function applyAnnotMouse() {
+  if (!annotateWindow) return;
+  // Herramientas de dibujo capturan el ratón; el láser deja pasar clics
+  // (sigue el cursor); "Mover" es totalmente transparente al ratón.
+  if (annotTool === 'rect' || annotTool === 'arrow' || annotTool === 'number') {
+    annotateWindow.setIgnoreMouseEvents(false);
+  } else if (annotTool === 'laser') {
+    annotateWindow.setIgnoreMouseEvents(true, { forward: true });
+  } else {
+    annotateWindow.setIgnoreMouseEvents(true, { forward: false });
+  }
+}
+
+// El panel y la barra deben quedar por encima de la capa de anotaciones/zona.
+function updateControlZ() {
+  if (controlWindow) controlWindow.setAlwaysOnTop(isRecording || annotationsOpen || regionOpen, 'screen-saver');
+}
+
+// Cerrar la UI de grabación (barra unificada + capa de anotaciones + preview).
+function endRecordingUi() {
+  if (recbarWindow) recbarWindow.close();
+  annotationsOpen = false;
+  annotTool = 'none';
+  if (annotateWindow) annotateWindow.close();
+  // La preview en vivo de normal/podcast se oculta (en reel persiste como preview).
+  if (recorderWindow && recMode !== 'reel') recorderWindow.hide();
+}
+
+// Atajo de láser (durante la grabación): alterna la herramienta vía la recbar.
+function toggleLaser() {
+  if (!isRecording || !recbarWindow) return;
+  const next = annotTool === 'laser' ? 'none' : 'laser';
+  recbarWindow.webContents.send('set-active-tool', next);
+}
+
+// Atajo de confeti: crea la capa de dibujo si hace falta y dispara la ráfaga.
+function doConfetti() {
+  if (!isRecording) return;
+  if (!annotateWindow) { annotationsOpen = true; createAnnotateWindow(); applyAnnotMouse(); }
+  const send = () => annotateWindow && annotateWindow.webContents.send('confetti');
+  if (annotateWindow.webContents.isLoading()) annotateWindow.webContents.once('did-finish-load', send);
+  else send();
+}
+
+// Atajos de teclado globales (funcionan aunque la app no tenga el foco).
+function registerShortcuts() {
+  globalShortcut.register('CommandOrControl+Shift+R', () => {
+    if (isRecording) { if (recbarWindow) recbarWindow.webContents.send('rb', 'stop'); }
+    else if (controlWindow) controlWindow.webContents.send('shortcut', 'record');
+  });
+  globalShortcut.register('CommandOrControl+Shift+P', () => { if (recbarWindow) recbarWindow.webContents.send('rb', 'pause'); });
+  globalShortcut.register('CommandOrControl+Shift+A', () => { if (recbarWindow) recbarWindow.webContents.send('rb', 'annot'); });
+  globalShortcut.register('CommandOrControl+Shift+L', () => toggleLaser());
+  globalShortcut.register('CommandOrControl+Shift+C', () => doConfetti());
+}
+
+// --- Posición de la webcam (mapeo burbuja -> canvas) -------------------------
+
+// Devuelve la posición de la burbuja como fracciones (0..1) del display,
+// para que el compositor las multiplique por el tamaño real del canvas.
+function getWebcamRectFractions() {
+  if (!overlayWindow) return null;
+  const b = overlayWindow.getBounds();
+  const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+  const d = display.bounds;
+  return {
+    fx: (b.x - d.x) / d.width,
+    fy: (b.y - d.y) / d.height,
+    fw: b.width / d.width,
+    fh: b.height / d.height,
+  };
+}
+
+function sendWebcamRect() {
+  const rect = getWebcamRectFractions();
+  if (rect && recorderWindow && !recorderWindow.isDestroyed()) {
+    recorderWindow.webContents.send('webcam-rect', rect);
+  }
+}
+
+// Reafirmar prioridad al frente sin mover ni mostrar la burbuja.
+function pinOverlay() {
+  if (!overlayWindow || !overlayWindow.isVisible()) return;
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+}
+
+// Traer la burbuja a la pantalla donde está el cursor y al frente.
+function raiseOverlay() {
+  // En modo reel, podcast, o "sin cámara": la webcam no es una burbuja flotante.
+  if (recMode === 'reel' || recMode === 'podcast' || cameraShape === 'none') return;
+  const cursor = screen.getCursorScreenPoint();
+  const target = screen.getDisplayNearestPoint(cursor);
+  const wa = target.workArea;
+  const margin = 24;
+  let bw = defaultWidthFor(cameraShape);
+  let bh = Math.round(bw * aspectFor(cameraShape));
+  if (overlayWindow) {
+    const b = overlayWindow.getBounds();
+    bw = b.width; bh = b.height;
+  }
+  const x = wa.x + wa.width - bw - margin;
+  const y = wa.y + wa.height - bh - margin;
+  if (!overlayWindow) {
+    createOverlayWindow({ x, y, width: bw, height: bh });
+    return;
+  }
+  overlayWindow.setBounds({ x, y, width: bw, height: bh });
+  overlayWindow.show();
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  overlayWindow.moveTop();
+}
+
+// --- Permisos (solo macOS; en Windows se conceden por el sistema) ------------
+
+async function ensurePermissions() {
+  if (process.platform !== 'darwin') return { camera: true, mic: true, screen: true };
+  try {
+    await systemPreferences.askForMediaAccess('camera');
+    await systemPreferences.askForMediaAccess('microphone');
+  } catch (_) {}
+  return {
+    camera: systemPreferences.getMediaAccessStatus('camera'),
+    mic: systemPreferences.getMediaAccessStatus('microphone'),
+    screen: systemPreferences.getMediaAccessStatus('screen'),
+  };
+}
+
+// --- IPC ---------------------------------------------------------------------
+
+// Lista de pantallas disponibles (con miniatura)
+ipcMain.handle('get-sources', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 320, height: 200 },
+    fetchWindowIcons: false,
+  });
+  return sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    thumbnail: s.thumbnail.toDataURL(),
+  }));
+});
+
+ipcMain.handle('check-permissions', async () => ensurePermissions());
+
+// El panel pide ajustar su alto al contenido (compacto al grabar).
+ipcMain.on('resize-control', (_e, h) => {
+  if (!controlWindow) return;
+  const w = controlWindow.getContentSize()[0];
+  const height = Math.max(120, Math.min(900, Math.round(h)));
+  controlWindow.setContentSize(w, height);
+});
+
+// Estado del permiso de grabación de pantalla (en Windows siempre 'granted').
+ipcMain.handle('get-screen-status', async () => {
+  if (process.platform !== 'darwin') return 'granted';
+  return systemPreferences.getMediaAccessStatus('screen');
+});
+
+// El usuario eligió una pantalla; la guardamos para getDisplayMedia.
+ipcMain.handle('select-source', async (_e, sourceId) => {
+  const sources = await desktopCapturer.getSources({ types: ['screen'] });
+  selectedSource = sources.find((s) => s.id === sourceId) || sources[0];
+  return !!selectedSource;
+});
+
+// Empezar a grabar: abre burbuja + recorder y dispara el flujo.
+ipcMain.handle('start-recording', async (_e, settings) => {
+  systemAudio = settings.systemAudio === true; // lo lee el handler de getDisplayMedia
+  const full = {
+    ...settings,
+    cameraId, shape: cameraShape, border: cameraBorder, zoom: webcamZoom,
+    mode: recMode, bandPos, bandHeightFrac, cropRect,
+  };
+
+  if (recMode === 'reel' && bandPos !== 'bubble') {
+    // Reel con banda: webcam va en banda; ocultar burbuja y selector de zona.
+    if (overlayWindow) overlayWindow.hide();
+    openRegion(false);
+  } else if (recMode === 'podcast') {
+    // Podcast: la cámara va integrada en el canvas (panel derecho), no es burbuja.
+    if (overlayWindow) overlayWindow.hide();
+    openRegion(false);
+  } else {
+    // Normal o reel+burbuja: la webcam es burbuja.
+    if (recMode === 'reel') openRegion(false); // cerrar selector también en reel+burbuja al grabar
+    if (cameraShape !== 'none') {
+      if (!overlayWindow) createOverlayWindow();
+      else overlayWindow.show();
+    }
+  }
+  if (!recorderWindow) createRecorderWindow();
+
+  // Ocultar el panel y mostrar la barra unificada de grabación.
+  isRecording = true;
+  if (controlWindow) controlWindow.hide();
+  createRecbarWindow();
+  // Reafirmar que la burbuja queda siempre al frente al grabar (sin moverla)
+  setTimeout(pinOverlay, 80);
+  // Vista previa en vivo: opcional en modo normal, obligatoria en podcast
+  // (en podcast no hay burbuja flotante, así que sin esto el usuario no se ve).
+  const wantPrev = (settings.livePreview && recMode !== 'reel') || recMode === 'podcast';
+  if (wantPrev) {
+    const showPrev = () => showRecPreview();
+    if (recorderWindow.webContents.isLoading()) recorderWindow.webContents.once('did-finish-load', showPrev);
+    else showPrev();
+  }
+  updateControlZ();
+
+  // Esperar a que el recorder esté listo, luego enviar la orden.
+  const begin = () => {
+    sendWebcamRect();
+    recorderWindow.webContents.send('begin-recording', full);
+  };
+  if (recorderWindow.webContents.isLoading()) {
+    recorderWindow.webContents.once('did-finish-load', begin);
+  } else {
+    begin();
+  }
+  return true;
+});
+
+// Redimensionar la burbuja desde el asa, anclando la esquina superior izquierda
+// y manteniendo la proporción de la forma actual.
+ipcMain.on('overlay-resize', (_e, width) => {
+  if (!overlayWindow) return;
+  const b = overlayWindow.getBounds();
+  const w = Math.max(80, Math.min(600, Math.round(width)));
+  const h = Math.round(w * aspectFor(cameraShape));
+  overlayWindow.setBounds({ x: b.x, y: b.y, width: w, height: h });
+});
+
+// --- Anotaciones (IPC) --- solo la capa de dibujo; la barra es la recbar.
+ipcMain.handle('annot-toggle', (_e, on) => {
+  annotationsOpen = !!on;
+  if (on) {
+    createAnnotateWindow();
+    applyAnnotMouse();
+  } else {
+    annotTool = 'none';
+    if (annotateWindow) annotateWindow.close();
+  }
+  return on;
+});
+
+ipcMain.on('annot-cmd', (_e, cmd) => {
+  if (!annotateWindow) return;
+  if (cmd.type === 'tool') annotTool = cmd.value;
+  else if (cmd.type === 'color') annotColor = cmd.value;
+  else if (cmd.type === 'width') annotWidth = cmd.value;
+  else if (cmd.type === 'numbg') annotNumBg = cmd.value;
+  else if (cmd.type === 'clear') { annotateWindow.webContents.send('annot-clear'); return; }
+  else if (cmd.type === 'confetti') { annotateWindow.webContents.send('confetti'); return; }
+  applyAnnotMouse();
+  annotateWindow.webContents.send('annot-config', annotConfig());
+});
+
+// El panel cambia cámara/forma/borde (incluido el modo "sin cámara").
+ipcMain.handle('update-camera', (_e, opts) => {
+  cameraId = opts.cameraId || '';
+  cameraShape = opts.shape || 'circle';
+  cameraBorder = opts.border !== false;
+
+  // En reel con banda, en podcast (cámara integrada en el canvas), o "sin cámara":
+  // ocultar la burbuja flotante porque no debe aparecer encima de la pantalla.
+  const isReelBubble = recMode === 'reel' && bandPos === 'bubble';
+  if ((recMode === 'reel' && !isReelBubble) || recMode === 'podcast' || cameraShape === 'none') {
+    if (overlayWindow) overlayWindow.hide();
+    sendReelParams(); // por si la forma cambió y hay preview de reel escuchando
+    return true;
+  }
+
+  if (!overlayWindow) {
+    createOverlayWindow();
+  } else {
+    // Ajustar la proporción de la ventana a la nueva forma y reenviar config.
+    const b = overlayWindow.getBounds();
+    let w = b.width;
+    if (cameraShape === 'vertical') w = Math.min(b.width, 240);
+    else if (cameraShape === 'wide') w = Math.max(b.width, 280); // mínimo razonable para 16:9
+    overlayWindow.setBounds({ x: b.x, y: b.y, width: w, height: Math.round(w * aspectFor(cameraShape)) });
+    overlayWindow.webContents.send('overlay-config', { cameraId, shape: cameraShape, border: cameraBorder, zoom: webcamZoom });
+    overlayWindow.show();
+  }
+  sendReelParams();
+  return true;
+});
+
+// --- Modo de grabación (IPC) ---
+ipcMain.handle('set-mode', (_e, mode) => {
+  recMode = (mode === 'reel' || mode === 'podcast') ? mode : 'normal';
+  const showBubble = () => {
+    if (cameraShape !== 'none') {
+      if (!overlayWindow) createOverlayWindow();
+      else overlayWindow.show();
+    }
+  };
+  if (recMode === 'reel') {
+    if (overlayWindow) overlayWindow.hide();   // en reel la webcam va en banda, no burbuja
+    openRegion(!isFullCam());
+    showReelPreview();
+  } else if (recMode === 'podcast') {
+    // La webcam va integrada dentro del canvas (panel derecho vertical),
+    // así que no hay burbuja flotante ni selector de zona.
+    if (overlayWindow) overlayWindow.hide();
+    openRegion(false);
+    hideReelPreview();
+  } else {
+    openRegion(false);
+    hideReelPreview();
+    showBubble();
+  }
+  return recMode;
+});
+
+ipcMain.on('set-reel', (_e, opts) => {
+  if (opts.bandPos) bandPos = opts.bandPos;
+  if (typeof opts.bandHeightFrac === 'number') bandHeightFrac = opts.bandHeightFrac;
+  if (opts.reelHeadline && typeof opts.reelHeadline === 'object') reelHeadline = opts.reelHeadline;
+  if (typeof opts.reelHeadlineOffset === 'number') reelHeadlineOffset = opts.reelHeadlineOffset;
+  if (typeof opts.reelHeadlinePos === 'string') reelHeadlinePos = opts.reelHeadlinePos;
+  if (typeof opts.bubbleSizeFrac === 'number') bubbleSizeFrac = opts.bubbleSizeFrac;
+  if (typeof opts.bubbleLocked === 'boolean') {
+    if (opts.bubbleLocked && !bubbleLocked) {
+      // Al bloquear: capturar la posición actual de la burbuja en el canvas
+      const r = getWebcamRectFractions();
+      if (r && cropRect && cropRect.fw > 0 && cropRect.fh > 0) {
+        bubbleLockedRect = {
+          fx: (r.fx - cropRect.fx) / cropRect.fw,
+          fy: (r.fy - cropRect.fy) / cropRect.fh,
+          fw: r.fw / cropRect.fw,
+          fh: r.fh / cropRect.fh,
+        };
+      }
+      // Bloquear la ventana flotante en su sitio (evita arrastres accidentales)
+      if (overlayWindow) overlayWindow.setMovable(false);
+    } else if (!opts.bubbleLocked && bubbleLocked) {
+      bubbleLockedRect = null;
+      if (overlayWindow) overlayWindow.setMovable(true);
+    }
+    bubbleLocked = opts.bubbleLocked;
+  }
+  if (isFullCam()) {
+    // Cámara a pantalla completa: no hay zona que ajustar.
+    openRegion(false);
+  } else if (regionWindow) {
+    // Cambió el alto -> cambia el aspecto de la zona; re-bloquear el selector.
+    regionWindow.webContents.send('zone-config', { aspect: zoneAspect() });
+  }
+  // En modo reel + burbuja, mostramos el overlay para que el usuario lo coloque/arrastre.
+  if (recMode === 'reel' && bandPos === 'bubble' && cameraShape !== 'none') {
+    if (!overlayWindow) createOverlayWindow();
+    else overlayWindow.show();
+  } else if (recMode === 'reel' && bandPos !== 'bubble') {
+    if (overlayWindow) overlayWindow.hide();
+  }
+  sendReelParams();
+});
+
+ipcMain.on('set-zoom', (_e, z) => {
+  webcamZoom = z || 1;
+  if (overlayWindow) {
+    overlayWindow.webContents.send('overlay-config', { cameraId, shape: cameraShape, border: cameraBorder, zoom: webcamZoom });
+  }
+  sendReelParams();
+});
+
+ipcMain.on('zone-toggle', (_e, on) => openRegion(on));
+
+// Desde el selector de zona (recuadro) -> el recorder/preview lo sigue.
+ipcMain.on('zone-rect', (_e, r) => { cropRect = r; sendReelParams(); });
+
+// Desde la vista previa (arrastrar/zoom) -> el recuadro lo sigue.
+ipcMain.on('crop-update', (_e, r) => {
+  cropRect = r;
+  if (regionWindow) regionWindow.webContents.send('zone-config', { rect: cropRect });
+});
+
+ipcMain.on('pause-recording', () => {
+  if (recorderWindow) recorderWindow.webContents.send('pause-recording');
+});
+ipcMain.on('resume-recording', () => {
+  if (recorderWindow) recorderWindow.webContents.send('resume-recording');
+});
+ipcMain.on('stop-recording', () => {
+  if (recorderWindow) recorderWindow.webContents.send('stop-recording');
+});
+
+// --- Recepción de chunks de video desde el recorder --------------------------
+
+ipcMain.handle('rec-start', async (_e, mime) => {
+  recIsMp4 = /mp4/i.test(mime || '');
+  const ext = recIsMp4 ? 'mp4' : 'webm';
+  tempFilePath = path.join(os.tmpdir(), `joom-${Date.now()}.${ext}`);
+  writeStream = fs.createWriteStream(tempFilePath);
+  return true;
+});
+
+ipcMain.on('rec-chunk', (_e, chunk) => {
+  if (writeStream && !writeStream.writableEnded) writeStream.write(Buffer.from(chunk));
+});
+
+// El compositor reporta un fallo (p. ej. permiso de grabación de pantalla).
+ipcMain.on('rec-error', (_e, msg) => {
+  if (writeStream) { writeStream.end(); writeStream = null; }
+  isRecording = false;
+  endRecordingUi();
+  updateControlZ();
+  if (controlWindow) {
+    controlWindow.show();
+    controlWindow.webContents.send('export-done', { ok: false, error: msg });
+  }
+});
+
+// Cuando el recorder termina: cerrar stream, transcodificar a MP4 y guardar.
+ipcMain.handle('rec-stop', async () => {
+  isRecording = false;
+  endRecordingUi();
+  updateControlZ();
+  if (controlWindow) {
+    controlWindow.show();
+    controlWindow.webContents.send('export-busy'); // mostrar "Exportando…"
+  }
+
+  await new Promise((resolve) => {
+    if (writeStream) writeStream.end(resolve);
+    else resolve();
+  });
+  // Importante: a partir de aquí ya no aceptamos chunks tardíos.
+  writeStream = null;
+
+  if (!tempFilePath || !fs.existsSync(tempFilePath) || fs.statSync(tempFilePath).size === 0) {
+    const r = { ok: false, error: 'No se grabó ningún dato.' };
+    if (controlWindow) controlWindow.webContents.send('export-done', r);
+    return r;
+  }
+
+  // ¿Dónde guardar?
+  const def = path.join(
+    app.getPath('videos') || app.getPath('desktop'),
+    `Grabacion-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.mp4`
+  );
+  const { canceled, filePath } = await dialog.showSaveDialog(controlWindow, {
+    title: 'Guardar grabación',
+    defaultPath: def,
+    filters: [{ name: 'Video MP4', extensions: ['mp4'] }],
+  });
+  if (canceled || !filePath) {
+    fs.unlink(tempFilePath, () => {});
+    const r = { ok: false, error: 'Guardado cancelado.' };
+    if (controlWindow) controlWindow.webContents.send('export-done', r);
+    return r;
+  }
+
+  try {
+    const onProg = (pct) => {
+      if (controlWindow) controlWindow.webContents.send('export-progress', pct);
+    };
+    if (recIsMp4) {
+      // Ya es H.264: solo reempaquetar para web (moov al inicio), sin recodificar.
+      await remuxToMp4(tempFilePath, filePath, onProg);
+    } else {
+      await transcodeToMp4(tempFilePath, filePath, onProg);
+    }
+    fs.unlink(tempFilePath, () => {});
+    const result = { ok: true, filePath };
+    if (controlWindow) controlWindow.webContents.send('export-done', result);
+    return result;
+  } catch (err) {
+    const result = { ok: false, error: String(err) };
+    if (controlWindow) controlWindow.webContents.send('export-done', result);
+    return result;
+  }
+});
+
+// Solo aceptamos rutas a archivos reales bajo directorios donde la app guarda
+// salidas (Videos, Desktop, Downloads, tmp). Sin esto, un IPC malicioso podría
+// pedirnos que reveláramos en el explorador cualquier archivo del sistema.
+ipcMain.handle('reveal-file', async (_e, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return;
+  let resolved;
+  try { resolved = path.resolve(filePath); } catch (_) { return; }
+  const allowed = [
+    app.getPath('videos'),
+    app.getPath('desktop'),
+    app.getPath('downloads'),
+    os.tmpdir(),
+  ].map((p) => path.resolve(p));
+  if (!allowed.some((root) => resolved === root || resolved.startsWith(root + path.sep))) return;
+  if (!fs.existsSync(resolved)) return;
+  shell.showItemInFolder(resolved);
+});
+
+// --- Transcodificación WebM -> MP4 (H.264 + AAC) -----------------------------
+
+function runFfmpeg(args, onProgress) {
+  return new Promise((resolve, reject) => {
+    const bin = ffmpegPath || 'ffmpeg';
+    const proc = spawn(bin, args);
+    let stderr = '';
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+      const m = /time=(\d+):(\d+):(\d+\.\d+)/.exec(d.toString());
+      if (m && onProgress) {
+        const secs = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+        onProgress(secs);
+      }
+    });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg salió con código ${code}\n${stderr.slice(-800)}`));
+    });
+  });
+}
+
+// WebM (VP8/Opus) -> MP4 (H.264 + AAC): recodifica.
+function transcodeToMp4(input, output, onProgress) {
+  return runFfmpeg(
+    [
+      '-y', '-i', input,
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+      '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+      '-c:a', 'aac', '-b:a', '160k',
+      output,
+    ],
+    onProgress
+  );
+}
+
+// MP4 ya en H.264/AAC: solo reempaqueta (rápido, sin pérdida de calidad).
+function remuxToMp4(input, output, onProgress) {
+  return runFfmpeg(
+    ['-y', '-i', input, '-c', 'copy', '-movflags', '+faststart', output],
+    onProgress
+  );
+}
+
+// --- Arranque de la app ------------------------------------------------------
+
+// Endurecer todos los webContents que se creen en la app: bloquear navegación
+// fuera de los HTML locales y rechazar cualquier window.open o nuevo target.
+app.on('web-contents-created', (_e, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'https:' || u.protocol === 'http:') {
+        shell.openExternal(url);
+      }
+    } catch (_) { /* ignored */ }
+    return { action: 'deny' };
+  });
+  contents.on('will-navigate', (ev, url) => {
+    if (!url.startsWith('file://')) ev.preventDefault();
+  });
+});
+
+app.whenReady().then(() => {
+  // Manejador para getDisplayMedia: entrega la pantalla seleccionada y, si está
+  // activado, el audio del sistema vía loopback.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      const give = (video) => {
+        const res = { video };
+        if (systemAudio) res.audio = 'loopback'; // mantiene el sonido reproduciéndose
+        callback(res);
+      };
+      if (selectedSource) {
+        give(selectedSource);
+      } else {
+        desktopCapturer.getSources({ types: ['screen'] }).then((sources) => give(sources[0]));
+      }
+    },
+    { useSystemPicker: false }
+  );
+
+  createControlWindow();
+  registerShortcuts();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createControlWindow();
+  });
+});
+
+app.on('will-quit', () => globalShortcut.unregisterAll());
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});

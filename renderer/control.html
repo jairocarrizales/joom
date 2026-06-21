@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob: mediastream:;" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>Joom</title>
+</head>
+<body>
+  <div class="control">
+    <!-- Sidebar con iconos de navegación. El de "reel" se muestra solo en modo Reel. -->
+    <aside class="sidebar">
+      <button class="side-btn active" data-tab="capture" title="Capturar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>
+      </button>
+      <button class="side-btn" data-tab="imageaudio" title="Imagen y audio">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+      </button>
+      <button class="side-btn hidden" id="reelTabBtn" data-tab="reel" title="Reel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>
+      </button>
+    </aside>
+
+    <div class="main">
+      <h1><span class="dot"></span> Joom</h1>
+
+      <!-- Configuración (visible antes de grabar) -->
+      <div id="setup">
+
+        <!-- TAB Capturar -->
+        <div class="tab-panel active" data-panel="capture">
+          <div class="field">
+            <label>Modo</label>
+            <select id="modeSel">
+              <option value="normal">Pantalla completa (horizontal)</option>
+              <option value="reel">Reel vertical (9:16)</option>
+              <option value="podcast">Pantalla + cámara vertical (podcast)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Pantalla</label>
+            <select id="sourceSel"></select>
+          </div>
+
+          <div class="field">
+            <label>Calidad</label>
+            <select id="qualitySel">
+              <option value="720">Ligera — 720p · 30fps</option>
+              <option value="1080" selected>Alta — 1080p · 30fps (por defecto)</option>
+              <option value="1080-60">Fluida — 1080p · 60fps</option>
+              <option value="1440">Máxima — 1440p · 30fps</option>
+            </select>
+            <label class="check" style="margin-top:6px"><input type="checkbox" id="livePreviewChk" /> Vista previa en vivo (consume más)</label>
+          </div>
+
+          <button id="startBtn" class="btn btn-rec">● Grabar</button>
+          <p class="hint">Al grabar aparece una barra flotante con los controles (pausar, detener y anotaciones para presentar). El panel se oculta mientras grabas.</p>
+          <p class="hint">Atajos: Ctrl+Shift+R grabar/detener · Ctrl+Shift+P pausar · Ctrl+Shift+A anotaciones · Ctrl+Shift+L láser · Ctrl+Shift+C confeti</p>
+        </div>
+
+        <!-- TAB Imagen y audio -->
+        <div class="tab-panel" data-panel="imageaudio">
+          <div class="field">
+            <label>Cámara</label>
+            <select id="cameraSel"></select>
+          </div>
+
+          <div id="normalOpts" class="field">
+            <label>Forma de cámara</label>
+            <select id="shapeSel">
+              <option value="circle">● Círculo</option>
+              <option value="vertical">▮ Vertical (móvil)</option>
+              <option value="wide">▭ Horizontal 16:9 (sin recorte)</option>
+              <option value="none">✕ Sin cámara (solo pantalla)</option>
+            </select>
+            <label class="check"><input type="checkbox" id="borderChk" checked /> Borde blanco</label>
+          </div>
+
+          <div class="field">
+            <label>Zoom de cámara: <span id="zoomLbl">100%</span></label>
+            <input type="range" id="zoomRange" min="100" max="220" value="100" />
+          </div>
+
+          <div class="field">
+            <label>Micrófono</label>
+            <select id="micSel"></select>
+            <label class="check"><input type="checkbox" id="sysAudioChk" /> Audio del sistema</label>
+          </div>
+        </div>
+
+        <!-- TAB Reel -->
+        <div class="tab-panel" data-panel="reel">
+          <div id="reelOpts">
+            <div class="field">
+              <label>Cámara (banda)</label>
+              <select id="bandPosSel">
+                <option value="bottom">Banda abajo</option>
+                <option value="top">Banda arriba</option>
+                <option value="bubble">● Burbuja flotante (movible)</option>
+                <option value="full">Solo cámara (100%)</option>
+              </select>
+            </div>
+            <div class="field" id="bandHField">
+              <label>Alto de la cámara: <span id="bandHLbl">50%</span></label>
+              <input type="range" id="bandHRange" min="15" max="70" value="50" />
+            </div>
+            <button id="zoneBtn" class="btn btn-ghost">▭ Ajustar zona de pantalla</button>
+            <div class="field" id="bubbleSizeField" style="margin-top:8px">
+              <label class="sublabel">Tamaño de la burbuja en el video: <span id="bubbleSizeLbl">automático</span></label>
+              <input type="range" id="bubbleSizeRange" min="0" max="50" value="0" />
+              <label class="check" id="bubbleLockField" style="margin-top:6px"><input type="checkbox" id="bubbleLockChk" /> 🔒 Bloquear posición de la cámara</label>
+            </div>
+            <p class="hint">La cámara va en una banda; la pantalla se recorta a la “zona” que elijas. Al 100% queda solo la cámara (reel vertical). Resultado 1080×1920.</p>
+            <div class="field" id="reelHeadlineField" style="column-span:all">
+              <label>Banner / Texto del video (opcional)</label>
+              <input type="text" id="reelHeadlineTxt" placeholder="Ej: EL NEGOCIO QUE FACTURA MILLONES..." />
+              <input type="text" id="reelHeadlineTxt2" placeholder="Texto alterno (opcional, anima entre los dos)" style="margin-top:6px" />
+              <label class="check" style="margin-top:6px"><input type="checkbox" id="reelHeadlineAnim" /> Animar texto (1 texto = bucle; 2 textos = alternan, 10s entre uno y otro)</label>
+              <div style="margin-top:8px">
+                <div class="sublabel" style="margin-bottom:4px">Color del texto</div>
+                <div id="hlFgSwatches" class="csw-row"></div>
+                <input type="text" id="reelHeadlineFg" value="#ffffff" maxlength="7" style="width:96px;font-size:11px;margin-top:4px" />
+              </div>
+              <div style="margin-top:8px">
+                <div class="sublabel" style="margin-bottom:4px">Color del fondo</div>
+                <div id="hlBgSwatches" class="csw-row"></div>
+                <input type="text" id="reelHeadlineBg" value="#000000" maxlength="7" style="width:96px;font-size:11px;margin-top:4px" />
+              </div>
+              <label class="sublabel" style="margin-top:6px">Ubicación</label>
+              <select id="reelHeadlinePosSel">
+                <option value="camera">Junto a la cámara</option>
+                <option value="top">Título (arriba de todo el video)</option>
+                <option value="bottom">Pie (abajo de todo el video)</option>
+              </select>
+              <label class="sublabel" id="reelHeadlineOffsetLblWrap" style="margin-top:6px">Distancia a la cámara: <span id="reelHeadlineOffsetLbl">0%</span></label>
+              <input type="range" id="reelHeadlineOffset" min="0" max="60" value="0" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Exportación -->
+      <div id="exporting" class="hidden">
+        <div class="timer">Exportando…</div>
+        <p id="exportStatus" class="hint">Convirtiendo a MP4 con ffmpeg…</p>
+      </div>
+
+      <div id="status" class="status"></div>
+    </div>
+  </div>
+
+  <div id="countdown" class="countdown hidden"></div>
+
+  <script src="control.js"></script>
+</body>
+</html>
