@@ -19,7 +19,7 @@
       "**/node_modules/ffmpeg-static/**"
     ],
     "win": {
-      "icon": "build/icon_master.png",
+      "icon": "icono.png",
       "target": [
         "nsis"
       ]

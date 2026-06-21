@@ -121,6 +121,7 @@ function createControlWindow() {
   controlWindow = new BrowserWindow({
     width: 780,
     height: 720,
+    icon: path.join(__dirname, 'icono.png'),
     // Alto fijo: el contenido de las pestañas grandes scrollea dentro de .main
     // en vez de hacer saltar la ventana al cambiar entre pestañas. resize-control
     // solo se invoca para estados compactos (grabando, exportando).

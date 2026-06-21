@@ -42,6 +42,24 @@ un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **
 - Selector de **calidad** (720p / 1080p / 1080p60 / 1440p), **micrófono** y **audio del sistema**.
 - **Modo captura** (`Ctrl+Shift+S`): Joom se oculta de tus grabaciones por defecto; este modo lo hace visible temporalmente para que puedas tomar **capturas de pantalla** de la app.
 
+## 🎬 La barra de grabación
+
+Al grabar aparece una **barra flotante** con los controles (no sale en el video).
+
+**Compacta:**
+
+![Barra compacta](docs/barra-compacta.png)
+
+`⏱` tiempo · **⏸** pausar · **⏹** detener · **⬆️** traer la cámara al frente · **✏️** abrir anotaciones.
+
+**Abierta** (herramientas para presentar):
+
+![Barra abierta](docs/barra-abierta.png)
+
+**⦿** láser · **▭** rectángulo · **→** flecha · **①** números · **✦** confeti · grosor de línea · **colores** · **🗑️** borrar.
+
+En reels con **video / presentación / pantalla** aparecen además sus controles: ◀◀/⏸ del video, **‹ / ›** para pasar diapositivas, o **🔍− / 🔍+** para el zoom de la pantalla.
+
 ## ✅ Requisitos
 
 - **Windows 10 (2004+) o Windows 11**

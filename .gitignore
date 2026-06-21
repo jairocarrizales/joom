@@ -19,3 +19,6 @@ Desktop.ini
 .vscode/
 .idea/
 npm-debug.log*
+
+# Archivos de prueba
+*.pdf
