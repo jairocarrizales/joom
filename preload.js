@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('loom', {
   onExportDone: (cb) => ipcRenderer.on('export-done', (_e, r) => cb(r)),
   onExportBusy: (cb) => ipcRenderer.on('export-busy', () => cb()),
   onShortcut: (cb) => ipcRenderer.on('shortcut', (_e, a) => cb(a)),
+  onShotMode: (cb) => ipcRenderer.on('shot-mode', (_e, on) => cb(on)),
   resizeControl: (h) => ipcRenderer.send('resize-control', h),
   revealFile: (p) => ipcRenderer.invoke('reveal-file', p),
 

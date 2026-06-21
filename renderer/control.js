@@ -211,6 +211,12 @@ window.loom.onShortcut((action) => {
   if (action === 'record' && !setupEl.classList.contains('hidden')) startBtn.click();
 });
 
+// Modo captura (Ctrl+Shift+S): avisa cuando Joom queda visible para screenshots.
+window.loom.onShotMode((on) => {
+  if (on) setStatus('📷 Modo captura ON: ahora puedes tomar pantallazos de Joom. Ctrl+Shift+S para volver a ocultarlo de las grabaciones.', '');
+  else setStatus('Protección restaurada: Joom no saldrá en tus grabaciones.', 'ok');
+});
+
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   const sourceId = sourceSel.value;

@@ -538,6 +538,24 @@ function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Shift+A', () => { if (recbarWindow) recbarWindow.webContents.send('rb', 'annot'); });
   globalShortcut.register('CommandOrControl+Shift+L', () => toggleLaser());
   globalShortcut.register('CommandOrControl+Shift+C', () => doConfetti());
+  // Modo captura: alterna la protección de contenido para poder tomar
+  // pantallazos de Joom (normalmente está protegido para no salir en los videos).
+  globalShortcut.register('CommandOrControl+Shift+S', () => {
+    if (isRecording) return; // nunca desproteger mientras se graba
+    screenshotMode = !screenshotMode;
+    applyScreenshotMode();
+    if (controlWindow) controlWindow.webContents.send('shot-mode', screenshotMode);
+  });
+}
+
+// --- Modo captura (desactiva la protección para poder hacer screenshots) -----
+let screenshotMode = false;
+function applyScreenshotMode() {
+  const protect = !screenshotMode; // protegido salvo en modo captura
+  const wins = [controlWindow, overlayWindow, recorderWindow, recbarWindow, teleprompterWindow, regionWindow];
+  for (const w of wins) {
+    if (w && !w.isDestroyed()) { try { w.setContentProtection(protect); } catch (_) {} }
+  }
 }
 
 // --- Posición de la webcam (mapeo burbuja -> canvas) -------------------------
@@ -653,6 +671,9 @@ ipcMain.handle('select-source', async (_e, sourceId) => {
 
 // Empezar a grabar: abre burbuja + recorder y dispara el flujo.
 ipcMain.handle('start-recording', async (_e, settings) => {
+  // Por seguridad, al grabar siempre se reactiva la protección de contenido
+  // (si el usuario dejó activo el "modo captura", Joom no debe salir en el video).
+  if (screenshotMode) { screenshotMode = false; applyScreenshotMode(); if (controlWindow) controlWindow.webContents.send('shot-mode', false); }
   systemAudio = settings.systemAudio === true; // lo lee el handler de getDisplayMedia
   const full = {
     ...settings,
