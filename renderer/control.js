@@ -29,16 +29,10 @@ function setStatus(text, cls = '') {
 }
 
 const SETUP_HEIGHT = 720;
+// Mantener SIEMPRE el mismo alto (la ventana tiene scroll interno): así no
+// "salta" encogiéndose al exportar y agrandándose al volver al panel.
 function fitWindow() {
-  requestAnimationFrame(() => {
-    const setup = document.getElementById('setup');
-    const setupVisible = setup && !setup.classList.contains('hidden');
-    if (setupVisible) { window.loom.resizeControl(SETUP_HEIGHT); return; }
-    let h = 240;
-    const el = document.getElementById('exporting');
-    if (el && !el.classList.contains('hidden')) h = el.getBoundingClientRect().height + 80;
-    window.loom.resizeControl(Math.ceil(h));
-  });
+  requestAnimationFrame(() => window.loom.resizeControl(SETUP_HEIGHT));
 }
 
 // --- Inicialización ----------------------------------------------------------

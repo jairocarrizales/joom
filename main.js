@@ -18,6 +18,7 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
+const { buildAss } = require('./subs-ass'); // generador de subtítulos .ass (20+ estilos)
 
 // ffmpeg empaquetado (ffmpeg-static trae ffmpeg.exe en Windows); si no, el del PATH.
 let ffmpegPath = null;
@@ -69,6 +70,7 @@ let selectedSource = null;  // Fuente de pantalla elegida por el usuario (deskto
 let tempFilePath = null;    // Archivo temporal mientras se graba
 let writeStream = null;     // Stream de escritura del temporal
 let recIsMp4 = false;       // ¿El grabador ya produjo MP4 (H.264)?
+let lastSavedPath = null;   // último MP4 guardado (para subtítulos rápidos)
 
 let cameraId = '';          // Cámara seleccionada
 let cameraShape = 'circle'; // 'circle' | 'vertical' | 'wide' | 'none'
@@ -927,6 +929,7 @@ ipcMain.handle('rec-stop', async () => {
       await transcodeToMp4(tempFilePath, filePath, onProg);
     }
     fs.unlink(tempFilePath, () => {});
+    lastSavedPath = filePath; // para "Generar subtítulos" rápido
     const result = { ok: true, filePath };
     if (controlWindow) controlWindow.webContents.send('export-done', result);
     return result;
@@ -1162,10 +1165,10 @@ ipcMain.on('yt-seek', (_e, delta) => {
 
 // --- Transcodificación WebM -> MP4 (H.264 + AAC) -----------------------------
 
-function runFfmpeg(args, onProgress) {
+function runFfmpeg(args, onProgress, cwd) {
   return new Promise((resolve, reject) => {
     const bin = ffmpegPath || 'ffmpeg';
-    const proc = spawn(bin, args);
+    const proc = spawn(bin, args, cwd ? { cwd } : undefined);
     let stderr = '';
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
@@ -1204,6 +1207,185 @@ function remuxToMp4(input, output, onProgress) {
     onProgress
   );
 }
+
+// --- Subtítulos con Groq (Whisper hospedado) ---------------------------------
+
+// Tamaño del video (parseando la salida de ffmpeg -i) para escalar la fuente.
+function probeSize(file) {
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ['-i', file]);
+    let err = '';
+    proc.stderr.on('data', (d) => { err += d.toString(); });
+    proc.on('close', () => {
+      const m = /,\s(\d{2,5})x(\d{2,5})/.exec(err);
+      resolve(m ? { w: +m[1], h: +m[2] } : { w: 1920, h: 1080 });
+    });
+    proc.on('error', () => resolve({ w: 1920, h: 1080 }));
+  });
+}
+
+// Reparte la duración del segmento entre palabras (tras corregir el texto).
+function redistributeWordTimes(segStart, segEnd, text) {
+  const words = (text || '').split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const weights = words.map((w) => Math.max(1, w.length + 1));
+  const total = weights.reduce((a, b) => a + b, 0);
+  const dur = Math.max(0.001, segEnd - segStart);
+  let acc = 0;
+  return words.map((w, i) => {
+    const wDur = (weights[i] / total) * dur;
+    const s = segStart + acc; const e = s + wDur; acc += wDur;
+    return { word: w, start: s, end: e };
+  });
+}
+
+// Transcribe con Groq (whisper-large-v3) pidiendo timestamps por palabra.
+async function groqTranscribe(audioPath, apiKey, lang) {
+  const data = fs.readFileSync(audioPath);
+  const fd = new FormData();
+  fd.append('file', new Blob([data]), 'audio.mp3');
+  fd.append('model', 'whisper-large-v3');
+  fd.append('response_format', 'verbose_json');
+  fd.append('timestamp_granularities[]', 'word');
+  fd.append('timestamp_granularities[]', 'segment');
+  if (lang) fd.append('language', lang);
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + apiKey },
+    body: fd,
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error('Groq HTTP ' + res.status + ' ' + t.slice(0, 200));
+  }
+  return res.json();
+}
+
+// Groq devuelve words a nivel raíz; las repartimos en cada segmento por tiempo.
+function attachWordsToSegments(json) {
+  const segs = json.segments || [];
+  const words = json.words || [];
+  if (!words.length || !segs.length) return json;
+  let wi = 0;
+  for (const seg of segs) {
+    seg.words = [];
+    while (wi < words.length && words[wi].start < seg.end - 1e-3) {
+      seg.words.push({ word: words[wi].word, start: words[wi].start, end: words[wi].end });
+      wi++;
+    }
+  }
+  while (wi < words.length) {
+    segs[segs.length - 1].words.push({ word: words[wi].word, start: words[wi].start, end: words[wi].end });
+    wi++;
+  }
+  return json;
+}
+
+// Corrige errores obvios de transcripción/puntuación con un LLM de Groq.
+async function groqPolish(text, apiKey) {
+  const body = {
+    model: 'llama-3.3-70b-versatile',
+    messages: [
+      { role: 'system', content: 'Corrige SOLO errores obvios de transcripción, puntuación y mayúsculas iniciales en español. Mantén EXACTAMENTE las mismas palabras y su orden; no añadas ni quites contenido ni expliques nada. Responde solo con la frase corregida, sin comillas.' },
+      { role: 'user', content: text },
+    ],
+    temperature: 0.1,
+  };
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error('Groq LLM HTTP ' + res.status);
+  const j = await res.json();
+  let out = ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '').trim();
+  if (out.startsWith('"') && out.endsWith('"')) out = out.slice(1, -1);
+  return out;
+}
+
+// Quema los subtítulos .ass en el video. En Windows el filtro 'ass' no acepta
+// rutas con "C:\..."; por eso ejecutamos ffmpeg con cwd en la carpeta del .ass
+// y lo referenciamos solo por su nombre (sin ruta, sin dos puntos ni barras).
+function burnSubs(input, assPath, output, onProgress) {
+  const dir = path.dirname(assPath);
+  const name = path.basename(assPath);
+  return runFfmpeg(
+    ['-y', '-i', input, '-vf', `ass=${name}`, '-c:v', 'libx264', '-preset', 'veryfast',
+      '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'copy', output],
+    onProgress,
+    dir
+  );
+}
+
+ipcMain.handle('gen-subs', async (_e, opts) => {
+  const apiKey = (opts.apiKey || '').trim();
+  if (!apiKey) return { ok: false, error: 'Pon tu API key de Groq en la pestaña Subtítulos.' };
+  const send = (m) => controlWindow && controlWindow.webContents.send('subs-status', m);
+
+  const pick = await dialog.showOpenDialog(controlWindow, {
+    title: 'Elige el video para subtitular',
+    defaultPath: lastSavedPath || app.getPath('videos') || app.getPath('desktop'),
+    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v'] }],
+    properties: ['openFile'],
+  });
+  if (pick.canceled || !pick.filePaths[0]) return { ok: false, error: 'Cancelado.' };
+  const file = pick.filePaths[0];
+
+  const mp3 = path.join(os.tmpdir(), `joom-aud-${Date.now()}.mp3`);
+  const ass = path.join(os.tmpdir(), `joom-sub-${Date.now()}.ass`);
+  try {
+    send('Extrayendo audio…');
+    await runFfmpeg(['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '64k', mp3]);
+    const sz = fs.existsSync(mp3) ? fs.statSync(mp3).size : 0;
+    if (sz === 0) throw new Error('No se pudo extraer el audio.');
+    if (sz > 24 * 1024 * 1024) {
+      fs.unlink(mp3, () => {});
+      return { ok: false, error: 'El audio supera ~24 MB (video muy largo para una sola petición). Usa un clip más corto.' };
+    }
+
+    send('Transcribiendo con Groq… (puede tardar unos segundos)');
+    const json = await groqTranscribe(mp3, apiKey, (opts.lang || '').trim());
+    fs.unlink(mp3, () => {});
+    if (!json || !json.segments || !json.segments.length) {
+      return { ok: false, error: 'Groq no devolvió texto.' };
+    }
+    attachWordsToSegments(json);
+
+    if (opts.polish) {
+      const total = json.segments.length;
+      for (let i = 0; i < total; i++) {
+        const seg = json.segments[i];
+        const original = (seg.text || '').trim();
+        if (!original) continue;
+        send(`Corrigiendo con IA… ${i + 1}/${total}`);
+        try {
+          const fixed = await groqPolish(original, apiKey);
+          const ratio = fixed.length / Math.max(1, original.length);
+          if (fixed && fixed !== original && ratio > 0.5 && ratio < 1.6) {
+            seg.text = fixed;
+            seg.words = redistributeWordTimes(seg.start, seg.end, fixed);
+          }
+        } catch (e) { /* si falla, se queda el original */ }
+      }
+    }
+
+    send('Generando subtítulos…');
+    const size = await probeSize(file);
+    fs.writeFileSync(ass, buildAss(json, opts.style || 'pop', size));
+
+    const out = file.replace(/\.(mp4|mov|webm|mkv|m4v)$/i, '') + '-subs.mp4';
+    send('Insertando subtítulos en el video…');
+    await burnSubs(file, ass, out, (secs) => send(`Insertando… ${secs.toFixed(0)}s`));
+    fs.unlink(ass, () => {});
+
+    shell.showItemInFolder(out);
+    return { ok: true, filePath: out };
+  } catch (err) {
+    fs.unlink(mp3, () => {});
+    fs.unlink(ass, () => {});
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
 
 // --- Arranque de la app ------------------------------------------------------
 

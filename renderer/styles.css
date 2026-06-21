@@ -524,17 +524,17 @@ html.overlay, body.overlay { background: transparent !important; overflow: hidde
 }
 .sp-magic::before { content: '✨ '; }
 .sp-hand {
-  font-family: 'Snell Roundhand', 'Apple Chancery', cursive;
+  font-family: 'Segoe Script', 'Apple Chancery', cursive;
   color: #fff;
   font-size: 18px;
   font-style: italic;
 }
 .sp-hand-b {
-  font-family: 'Bradley Hand', 'Apple Chancery', cursive;
+  font-family: 'Segoe Print', 'Apple Chancery', cursive;
   color: #fff;
   font-size: 16px;
 }
-.sp-hand2 { color: #6cf; font-size: 14px; font-family: 'Snell Roundhand', cursive; font-style: italic; line-height: 1.1; }
+.sp-hand2 { color: #6cf; font-size: 14px; font-family: 'Segoe Script', cursive; font-style: italic; line-height: 1.1; }
 .sp-hand2::after { content: '\Ahola'; color: #fff; font-family: 'Helvetica', sans-serif; font-style: normal; font-size: 11px; white-space: pre; }
 .sp-bigword {
   color: #fff; font-family: 'Helvetica', sans-serif; font-weight: 900; font-size: 11px; line-height: 1;

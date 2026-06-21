@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld('loom', {
   resizeControl: (h) => ipcRenderer.send('resize-control', h),
   revealFile: (p) => ipcRenderer.invoke('reveal-file', p),
 
+  // --- Subtítulos (Groq) ---
+  genSubs: (opts) => ipcRenderer.invoke('gen-subs', opts),
+  onSubsStatus: (cb) => ipcRenderer.on('subs-status', (_e, m) => cb(m)),
+
   // --- Teleprompter ---
   teleprompterToggle: (on) => ipcRenderer.invoke('teleprompter-toggle', on),
   onTpState: (cb) => ipcRenderer.on('tp-state', (_e, s) => cb(s)),
