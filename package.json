@@ -15,6 +15,15 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!docs/**",
+      "!tools/**",
+      "!build/**",
+      "!icon-1024.png",
+      "!*.md"
+    ],
     "asarUnpack": [
       "**/node_modules/ffmpeg-static/**"
     ],
