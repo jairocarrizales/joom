@@ -96,7 +96,24 @@
               <option value="corner-tr">◥ Esquina (arriba-derecha)</option>
               <option value="none">✕ Sin cámara (solo pantalla)</option>
             </select>
-            <label class="check"><input type="checkbox" id="borderChk" checked /> Borde blanco</label>
+            <label class="check"><input type="checkbox" id="borderChk" checked /> Borde</label>
+            <div class="borderrow">
+              <label class="borderlbl">Color
+                <button type="button" class="swatch" id="borderSwatch" title="Elegir color"></button>
+              </label>
+              <label class="borderlbl">Grosor
+                <input type="range" id="borderWidth" min="1" max="20" value="3" />
+              </label>
+            </div>
+            <div class="colorpop" id="colorPop" hidden>
+              <div class="sv" id="svArea"><div class="sv-cur" id="svCur"></div></div>
+              <div class="hue" id="hueBar"><div class="hue-cur" id="hueCur"></div></div>
+              <div class="cprow">
+                <span class="hash">#</span>
+                <input type="text" id="borderHex" class="hexinput" maxlength="6" value="ffffff" spellcheck="false" />
+              </div>
+              <div class="swatches" id="borderPresets"></div>
+            </div>
           </div>
 
           <div class="field">

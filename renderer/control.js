@@ -6,6 +6,117 @@ const sourceSel = $('sourceSel');
 const cameraSel = $('cameraSel');
 const shapeSel = $('shapeSel');
 const borderChk = $('borderChk');
+const borderHex = $('borderHex');
+const borderSwatch = $('borderSwatch');
+const borderPresets = $('borderPresets');
+const borderWidth = $('borderWidth');
+const colorPop = $('colorPop');
+const svArea = $('svArea');
+const svCur = $('svCur');
+const hueBar = $('hueBar');
+const hueCur = $('hueCur');
+
+// Color de borde actual (#rrggbb) y estado HSV del selector navegable.
+let curBorderColor = '#ffffff';
+let hsv = { h: 0, s: 0, v: 1 };
+
+// --- Conversión de color ---
+function hsvToRgb(h, s, v) {
+  const c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c;
+  let r, g, b;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+function rgbToHex(r, g, b) { return '#' + [r, g, b].map((n) => n.toString(16).padStart(2, '0')).join(''); }
+function hexToRgb(hex) {
+  const s = hex.replace('#', '');
+  return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+}
+function rgbToHsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d) {
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60; if (h < 0) h += 360;
+  }
+  return { h, s: mx ? d / mx : 0, v: mx };
+}
+// Normaliza "fff"/"#abc"/"ffffff" → "#rrggbb"; null si no es válido.
+function normHex(v) {
+  let s = String(v || '').trim().replace(/^#/, '').toLowerCase();
+  if (/^[0-9a-f]{3}$/.test(s)) s = s.split('').map((c) => c + c).join('');
+  if (/^[0-9a-f]{6}$/.test(s)) return '#' + s;
+  return null;
+}
+
+// Refresca el selector (fondo, cursores, swatch) desde el estado hsv.
+function renderPicker() {
+  const [r, g, b] = hsvToRgb(hsv.h, hsv.s, hsv.v);
+  curBorderColor = rgbToHex(r, g, b);
+  borderSwatch.style.background = curBorderColor;
+  svArea.style.background =
+    `linear-gradient(to top, #000, rgba(0,0,0,0)), linear-gradient(to right, #fff, rgba(255,255,255,0)), hsl(${hsv.h} 100% 50%)`;
+  svCur.style.left = (hsv.s * 100) + '%';
+  svCur.style.top = ((1 - hsv.v) * 100) + '%';
+  hueCur.style.left = (hsv.h / 360 * 100) + '%';
+}
+
+// Fija el color desde un hex (string). Si updateField, escribe el campo.
+function setBorderColor(hex, updateField) {
+  const n = normHex(hex);
+  if (!n) return false;
+  hsv = rgbToHsv(...hexToRgb(n));
+  renderPicker();
+  if (updateField) borderHex.value = n.replace('#', '');
+  borderHex.classList.remove('bad');
+  return true;
+}
+
+// Arrastre genérico sobre un área (SV o tono).
+function makeDraggable(el, fn) {
+  el.addEventListener('pointerdown', (e) => {
+    el.setPointerCapture(e.pointerId); fn(e);
+    const mv = (ev) => fn(ev);
+    const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); };
+    el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
+  });
+}
+function pickSV(e) {
+  const r = svArea.getBoundingClientRect();
+  hsv.s = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  hsv.v = Math.min(1, Math.max(0, 1 - (e.clientY - r.top) / r.height));
+  renderPicker(); borderHex.value = curBorderColor.replace('#', ''); applyCamera();
+}
+function pickHue(e) {
+  const r = hueBar.getBoundingClientRect();
+  hsv.h = Math.min(360, Math.max(0, (e.clientX - r.left) / r.width * 360));
+  renderPicker(); borderHex.value = curBorderColor.replace('#', ''); applyCamera();
+}
+makeDraggable(svArea, pickSV);
+makeDraggable(hueBar, pickHue);
+
+// Abrir/cerrar el selector al pulsar la muestra.
+borderSwatch.addEventListener('click', (e) => { e.stopPropagation(); colorPop.hidden = !colorPop.hidden; });
+colorPop.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', () => { colorPop.hidden = true; });
+
+// Paleta de colores rápidos.
+const PRESETS = ['#ffffff', '#000000', '#ff3b6b', '#ff8c00', '#ffd000', '#27d07b',
+  '#00c2d1', '#2a7fff', '#7b5bff', '#ff5bd1', '#9b6b3a', '#8a8f98'];
+PRESETS.forEach((c) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'preset'; b.style.background = c; b.title = c;
+  b.addEventListener('click', () => { setBorderColor(c, true); applyCamera(); });
+  borderPresets.appendChild(b);
+});
 const micSel = $('micSel');
 const sysAudioChk = $('sysAudioChk');
 const qualitySel = $('qualitySel');
@@ -98,11 +209,33 @@ function applyCamera() {
   const shape = shapeSel.value;
   cameraSel.disabled = shape === 'none';
   borderChk.disabled = shape === 'none';
-  window.loom.updateCamera({ cameraId: cameraSel.value, shape, border: borderChk.checked });
+  const dis = shape === 'none' || !borderChk.checked;
+  borderSwatch.disabled = dis;
+  borderWidth.disabled = dis;
+  if (dis) colorPop.hidden = true;
+  localStorage.setItem('borderColor', curBorderColor);
+  localStorage.setItem('borderWidth', borderWidth.value);
+  localStorage.setItem('borderOn', borderChk.checked ? '1' : '0');
+  window.loom.updateCamera({
+    cameraId: cameraSel.value, shape, border: borderChk.checked,
+    borderColor: curBorderColor, borderWidth: Number(borderWidth.value),
+  });
 }
+// Restaurar preferencias de borde.
+setBorderColor(localStorage.getItem('borderColor') || '#ffffff', true);
+borderWidth.value = localStorage.getItem('borderWidth') || '3';
+if (localStorage.getItem('borderOn') === '0') borderChk.checked = false;
 shapeSel.addEventListener('change', applyCamera);
 cameraSel.addEventListener('change', applyCamera);
 borderChk.addEventListener('change', applyCamera);
+borderWidth.addEventListener('input', applyCamera);
+// Campo hexadecimal: valida y aplica al escribir (acepta 3 o 6 dígitos).
+borderHex.addEventListener('input', () => {
+  if (normHex(borderHex.value)) { setBorderColor(borderHex.value, false); applyCamera(); }
+  else borderHex.classList.add('bad');
+});
+borderHex.addEventListener('blur', () => setBorderColor(curBorderColor, true)); // re-normaliza
+borderHex.addEventListener('keydown', (e) => { if (e.key === 'Enter') borderHex.blur(); });
 
 zoomRange.addEventListener('input', () => {
   zoomLbl.textContent = zoomRange.value + '%';

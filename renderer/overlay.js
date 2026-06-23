@@ -9,57 +9,69 @@ const ccx = cc.getContext('2d');
 let currentCameraId = null;
 let stream = null;
 
-// --- Vista previa de "esquina" en canvas (mismo render que la grabación) ------
-let cornerOn = false, curCorner = 'corner-bl', curZoom = 1, cornerRaf = null;
+// --- Vista previa en canvas (mismo render que la grabación) -------------------
+// Las formas "personalizadas" se dibujan en canvas con el módulo compartido para
+// que coincidan con el grabado y el borde (color+grosor) funcione en todas.
+const CANVAS_SHAPES = ['card', 'pebble', 'shield', 'shield2', 'arch'];
+let canvasOn = false, curShape = 'circle', curZoom = 1, canvasRaf = null;
+let curBorder = true, curBorderColor = '#ffffff', curBorderPct = 3;
 
-function sizeCornerCanvas() {
+function isCanvasShape(s) { return s.indexOf('corner-') === 0 || CANVAS_SHAPES.includes(s); }
+
+function sizeShapeCanvas() {
   const r = window.devicePixelRatio || 1;
   cc.width = Math.max(2, Math.round(window.innerWidth * r));
   cc.height = Math.max(2, Math.round(window.innerHeight * r));
 }
 
-function quarterPath(W, H, corner) {
-  const isLeft = corner === 'corner-bl' || corner === 'corner-tl';
-  const isTop = corner === 'corner-tl' || corner === 'corner-tr';
-  const cx = isLeft ? 0 : W, cy = isTop ? 0 : H;
-  let a0, a1;
-  if (isLeft && !isTop) { a0 = -Math.PI / 2; a1 = 0; }
-  else if (!isLeft && !isTop) { a0 = Math.PI; a1 = 1.5 * Math.PI; }
-  else if (isLeft && isTop) { a0 = 0; a1 = Math.PI / 2; }
-  else { a0 = Math.PI / 2; a1 = Math.PI; }
-  ccx.beginPath(); ccx.moveTo(cx, cy); ccx.ellipse(cx, cy, W, H, 0, a0, a1, false); ccx.closePath();
-}
-
-function drawCorner() {
-  if (!cornerOn) { cornerRaf = null; return; }
+function drawShapeCanvas() {
+  if (!canvasOn) { canvasRaf = null; return; }
   const W = cc.width, H = cc.height, vw = cam.videoWidth, vh = cam.videoHeight;
   ccx.clearRect(0, 0, W, H);
   if (vw && vh) {
-    ccx.save();
-    quarterPath(W, H, curCorner);
-    ccx.clip();
-    const isLeft = curCorner === 'corner-bl' || curCorner === 'corner-tl';
-    const isTop = curCorner === 'corner-tl' || curCorner === 'corner-tr';
-    const cs = Math.max(W / vw, H / vh) * (curZoom || 1) * 1.3; // factor de relleno
-    const cdw = vw * cs, cdh = vh * cs;
-    const ox = isLeft ? 0.42 * W : 0.58 * W;
-    const oy = isTop ? 0.42 * H : 0.58 * H;
-    ccx.translate(ox, oy); ccx.scale(-1, 1);
-    ccx.drawImage(cam, -cdw / 2, -cdh / 2, cdw, cdh);
-    ccx.restore();
+    const lw = Math.max(1, (curBorderPct / 100) * Math.min(W, H));
+    if (curShape.indexOf('corner-') === 0) {
+      // Esquina: anclar al borde, centroide + factor de relleno 1.3, borde en la curva.
+      const a = window.JoomShapes.cornerArc(curShape, 0, 0, W, H);
+      ccx.save();
+      ccx.beginPath(); ccx.moveTo(a.ccx, a.ccy); ccx.ellipse(a.ccx, a.ccy, W, H, 0, a.a0, a.a1, false); ccx.closePath();
+      ccx.clip();
+      const cs = Math.max(W / vw, H / vh) * (curZoom || 1) * 1.3;
+      const ox = a.isLeft ? 0.42 * W : 0.58 * W;
+      const oy = a.isTop ? 0.42 * H : 0.58 * H;
+      ccx.translate(ox, oy); ccx.scale(-1, 1);
+      ccx.drawImage(cam, -vw * cs / 2, -vh * cs / 2, vw * cs, vh * cs);
+      ccx.restore();
+      if (curBorder) {
+        ccx.beginPath(); ccx.ellipse(a.ccx, a.ccy, W, H, 0, a.a0, a.a1, false);
+        ccx.lineWidth = lw; ccx.strokeStyle = curBorderColor; ccx.stroke();
+      }
+    } else {
+      ccx.save();
+      window.JoomShapes.trace(ccx, curShape, 0, 0, W, H);
+      ccx.clip();
+      const cs = Math.max(W / vw, H / vh) * (curZoom || 1);
+      ccx.translate(W / 2, H / 2); ccx.scale(-1, 1);
+      ccx.drawImage(cam, -vw * cs / 2, -vh * cs / 2, vw * cs, vh * cs);
+      ccx.restore();
+      if (curBorder) {
+        window.JoomShapes.trace(ccx, curShape, lw / 2, lw / 2, W - lw, H - lw);
+        ccx.lineWidth = lw; ccx.strokeStyle = curBorderColor; ccx.lineJoin = 'round'; ccx.stroke();
+      }
+    }
   }
-  cornerRaf = requestAnimationFrame(drawCorner);
+  canvasRaf = requestAnimationFrame(drawShapeCanvas);
 }
 
-function startCorner(corner) {
-  curCorner = corner; cornerOn = true; sizeCornerCanvas();
-  if (!cornerRaf) cornerRaf = requestAnimationFrame(drawCorner);
+function startShapeCanvas() {
+  canvasOn = true; sizeShapeCanvas();
+  if (!canvasRaf) canvasRaf = requestAnimationFrame(drawShapeCanvas);
 }
-function stopCorner() {
-  cornerOn = false;
-  if (cornerRaf) { cancelAnimationFrame(cornerRaf); cornerRaf = null; }
+function stopShapeCanvas() {
+  canvasOn = false;
+  if (canvasRaf) { cancelAnimationFrame(canvasRaf); canvasRaf = null; }
 }
-window.addEventListener('resize', () => { if (cornerOn) sizeCornerCanvas(); });
+window.addEventListener('resize', () => { if (canvasOn) sizeShapeCanvas(); });
 
 // Abrir/cambiar la webcam.
 async function startCamera(id) {
@@ -80,31 +92,31 @@ async function startCamera(id) {
 }
 
 // Configuración (forma + borde + cámara) desde el proceso principal.
-window.loom.onOverlayConfig(({ cameraId, shape, border, zoom }) => {
-  const vert = shape === 'vertical';
-  const wide = shape === 'wide';
-  const card = shape === 'card';
-  const pebble = shape === 'pebble';
-  const feather = shape === 'feather';
-  const shield = shape === 'shield';
-  const shield2 = shape === 'shield2';
-  const arch = shape === 'arch';
-  const corner = shape.indexOf('corner-') === 0;
-  bubble.classList.toggle('vertical', vert);
-  bubble.classList.toggle('wide', wide);
-  bubble.classList.toggle('card', card);
-  bubble.classList.toggle('pebble', pebble);
-  bubble.classList.toggle('feather', feather);
-  bubble.classList.toggle('shield', shield);
-  bubble.classList.toggle('shield2', shield2);
-  bubble.classList.toggle('arch', arch);
-  bubble.classList.toggle('cornermode', corner);
-  bubble.classList.toggle('circle', !vert && !wide && !card && !pebble && !feather && !shield && !shield2 && !arch && !corner);
-  bubble.classList.toggle('noborder', border === false);
-  // Zoom de cámara: escala uniforme (espejo + zoom) recortada por la burbuja.
-  cam.style.transform = `scaleX(-1) scale(${zoom || 1})`;
+window.loom.onOverlayConfig(({ cameraId, shape, border, zoom, borderColor, borderWidth }) => {
+  curShape = shape;
   curZoom = zoom || 1;
-  if (corner) startCorner(shape); else stopCorner();
+  curBorder = border !== false;
+  if (typeof borderColor === 'string') curBorderColor = borderColor;
+  if (typeof borderWidth === 'number') curBorderPct = borderWidth;
+  const onCanvas = isCanvasShape(shape);
+  const feather = shape === 'feather';
+  // Clases CSS solo para las formas simples (las personalizadas van por canvas).
+  bubble.classList.toggle('vertical', shape === 'vertical');
+  bubble.classList.toggle('wide', shape === 'wide');
+  bubble.classList.toggle('feather', feather);
+  bubble.classList.toggle('circle', shape === 'circle');
+  bubble.classList.toggle('canvasmode', onCanvas);
+  cam.style.transform = `scaleX(-1) scale(${zoom || 1})`;
+  // Borde: en canvas lo dibuja el propio canvas; en formas simples, borde CSS.
+  if (onCanvas) {
+    bubble.style.border = '';
+  } else if (curBorder && !feather) {
+    const bw = Math.max(1, (curBorderPct / 100) * Math.min(window.innerWidth, window.innerHeight));
+    bubble.style.border = `${bw}px solid ${curBorderColor}`;
+  } else {
+    bubble.style.border = 'none';
+  }
+  if (onCanvas) startShapeCanvas(); else stopShapeCanvas();
   if (cameraId !== currentCameraId) startCamera(cameraId);
 });
 

@@ -86,7 +86,9 @@ let mediaRecorder = null;
 let drawInt = null;
 let webcamRect = null; // { fx, fy, fw, fh } en fracciones del display
 let shape = 'circle';  // 'circle' | 'vertical' | 'none'
-let border = true;     // ¿dibujar borde blanco alrededor de la cámara?
+let border = true;     // ¿dibujar borde alrededor de la cámara?
+let borderColor = '#ffffff'; // color del borde
+let borderFrac = 0.03; // grosor del borde como fracción del lado menor (0.01..0.20)
 
 let mode = 'normal';   // 'normal' | 'reel'
 let bandPos = 'bottom';
@@ -329,6 +331,17 @@ function drawWebcam() {
     ctx.scale(-1, 1);
     ctx.drawImage(webcamVideo, -cdw / 2, -cdh / 2, cdw, cdh);
     ctx.restore();
+    // Borde: solo la curva del cuarto (los lados rectos van pegados al borde).
+    if (border) {
+      const a = window.JoomShapes.cornerArc(shape, x, y, w, h);
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(a.ccx, a.ccy, w, h, 0, a.a0, a.a1, false);
+      ctx.lineWidth = Math.max(1, borderFrac * Math.min(w, h));
+      ctx.strokeStyle = borderColor;
+      ctx.stroke();
+      ctx.restore();
+    }
     return;
   }
 
@@ -365,12 +378,14 @@ function drawWebcam() {
   ctx.drawImage(webcamVideo, -dw / 2, -dh / 2, dw, dh);
   ctx.restore();
 
-  // Borde blanco (opcional)
+  // Borde (opcional): color y grosor configurables.
   if (border) {
+    const lw = Math.max(1, borderFrac * Math.min(w, h));
     ctx.save();
-    tracePath(x + 1.5, y + 1.5, w - 3, h - 3);
-    ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.02);
-    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    tracePath(x + lw / 2, y + lw / 2, w - lw, h - lw);
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = borderColor;
+    ctx.lineJoin = 'round';
     ctx.stroke();
     ctx.restore();
   }
@@ -915,6 +930,8 @@ let previewing = false;
 function applyReelSettings(settings) {
   shape = settings.shape || 'circle';
   border = settings.border !== false;
+  if (typeof settings.borderColor === 'string') borderColor = settings.borderColor;
+  if (typeof settings.borderWidth === 'number') borderFrac = Math.max(0.005, Math.min(0.25, settings.borderWidth / 100));
   mode = (settings.mode === 'reel' || settings.mode === 'area' || settings.mode === 'podcast') ? settings.mode : 'normal';
   if (settings.bandPos) bandPos = settings.bandPos;
   if (typeof settings.bandHeightFrac === 'number') bandHeightFrac = settings.bandHeightFrac;
@@ -1117,6 +1134,8 @@ window.loom.onReelParams((p) => {
   if (typeof p.bubbleSizeFrac === 'number') bubbleSizeFrac = p.bubbleSizeFrac;
   if (typeof p.shape === 'string') shape = p.shape;
   if (typeof p.border === 'boolean') border = p.border;
+  if (typeof p.borderColor === 'string') borderColor = p.borderColor;
+  if (typeof p.borderWidth === 'number') borderFrac = Math.max(0.005, Math.min(0.25, p.borderWidth / 100));
   if (typeof p.bubbleLocked === 'boolean') bubbleLocked = p.bubbleLocked;
   if (p.bubbleLockedRect !== undefined) bubbleLockedRect = p.bubbleLockedRect;
   if (typeof p.ytUrl === 'string') loadMedia(p.ytUrl, p.mediaKind || mediaKind);

@@ -389,10 +389,37 @@ html.overlay, body.overlay { background: transparent !important; overflow: hidde
 .bubble.arch video { border-radius: 0; }
 /* Esquina (cuarto de elipse): la vista previa se dibuja en un CANVAS con el MISMO
    código que la grabación, para que coincidan exactamente (no CSS). */
+/* Controles de borde (panel de control) */
+.borderrow { display: flex; gap: 14px; margin-top: 8px; align-items: center; }
+.borderlbl { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: 0.9; }
+.borderlbl input[type="range"] { width: 110px; }
+.swatch { width: 24px; height: 24px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.4); background: #fff; cursor: pointer; padding: 0; }
+/* Selector de color navegable */
+.colorpop { margin-top: 8px; padding: 10px; width: 220px; border-radius: 10px;
+  background: #1b1f27; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.sv { position: relative; width: 200px; height: 130px; border-radius: 6px; cursor: crosshair;
+  background:
+    linear-gradient(to top, #000, rgba(0,0,0,0)),
+    linear-gradient(to right, #fff, rgba(255,255,255,0)),
+    hsl(0 100% 50%); }
+.sv-cur { position: absolute; width: 12px; height: 12px; border-radius: 50%; transform: translate(-50%,-50%);
+  border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.6); pointer-events: none; }
+.hue { position: relative; width: 200px; height: 14px; margin-top: 10px; border-radius: 7px; cursor: pointer;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.hue-cur { position: absolute; top: 50%; width: 6px; height: 20px; border-radius: 3px; transform: translate(-50%,-50%);
+  background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.6); pointer-events: none; }
+.cprow { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.cprow .hash { color: #9aa3af; font: 13px monospace; }
+.hexinput { width: 96px; padding: 4px 6px; font: 13px monospace; border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.06); color: #fff; text-transform: lowercase; }
+.hexinput.bad { border-color: #ff5b6b; }
+.swatches { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.swatches .preset { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.3); cursor: pointer; padding: 0; }
+.swatches .preset:hover { transform: scale(1.15); }
 .bubble #cc { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
-.bubble.cornermode { border: none; box-shadow: none; background: transparent; border-radius: 0; }
-.bubble.cornermode #cc { display: block; }
-.bubble.cornermode video { opacity: 0; }  /* sigue decodificando frames para el canvas */
+.bubble.canvasmode { border: none; box-shadow: none; background: transparent; border-radius: 0; }
+.bubble.canvasmode #cc { display: block; }
+.bubble.canvasmode video { opacity: 0; }  /* sigue decodificando frames para el canvas */
 .bubble.noborder { border: none; box-shadow: none; }  /* sin marco blanco */
 .bubble:active { cursor: grabbing; }
 .bubble video {
