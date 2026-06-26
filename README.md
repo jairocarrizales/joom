@@ -9,14 +9,7 @@ Construido con **Electron**. La pantalla y la cámara se componen en tiempo real
 un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **MP4**
 (H.264 + AAC, listo para redes/web).
 
-## ⬇️ Descargar
 
-Descarga el instalador para Windows desde la página de **Releases**:
-
-**👉 https://github.com/jairocarrizales/joom/releases**
-
-Baja el archivo `Joom-Setup-x.y.z.exe`, ejecútalo e instala (no requiere permisos de
-administrador). Quedará **Joom** en el menú inicio y el escritorio.
 
 ## ✨ Funciones
 
