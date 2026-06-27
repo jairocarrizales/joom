@@ -118,6 +118,17 @@ desde código: Node.js 18+ y Git.
 - Selector de **calidad** (720p / 1080p / 1080p60 / 1440p), **micrófono** y **audio del sistema**.
 - **Modo captura** (`Ctrl+Shift+S`): Joom se oculta de tus grabaciones por defecto; este modo lo hace visible temporalmente para que puedas tomar **capturas de pantalla** de la app.
 
+## 📸 Capturas
+
+| | |
+|:---:|:---:|
+| **Panel de control** | **Modo reel vertical** |
+| ![Panel de control](screenshots/panel.png) | ![Modo reel](screenshots/reel.png) |
+| **Subtítulos automáticos** | **Selector de color del borde** |
+| ![Subtítulos](screenshots/subtitulos.png) | ![Selector de color](screenshots/mapa-de-colores.png) |
+| **Barra de anotaciones** | **Teleprompter** |
+| ![Barra de anotaciones](screenshots/barra-anotaciones.png) | ![Teleprompter](screenshots/teleprompter.png) |
+
 ## 🎬 La barra de grabación
 
 Al grabar aparece una **barra flotante** con los controles (no sale en el video).
