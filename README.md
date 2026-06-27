@@ -13,6 +13,16 @@ Construido con **Electron**. La pantalla y la cámara se componen en tiempo real
 un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **MP4**
 (H.264 + AAC, listo para redes/web).
 
+## ▶️ Video de demostración
+
+<p align="center">
+  <a href="https://youtu.be/Jxxmi5V2TsM">
+    <img src="screenshots/video-portada.jpg" alt="Ver el video de Joom en YouTube" width="640" />
+  </a>
+</p>
+
+<p align="center"><a href="https://youtu.be/Jxxmi5V2TsM"><b>▶️ Ver el video en YouTube</b></a></p>
+
 ## 🛠️ Instalación desde cero (paso a paso)
 
 > Si solo quieres **usar** Joom, haz la **Opción A**. La **Opción B** es para
