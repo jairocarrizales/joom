@@ -21,9 +21,16 @@ un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **
   - **Pantalla arriba / abajo + cámara**: tu pantalla en una banda, con **zoom en vivo** para resaltar detalles.
 - **Podcast** (pantalla + cámara vertical): pantalla a alto completo y cámara vertical al lado; la cámara se puede **alejar/acercar** y desplazar.
 
-### Cámara
-- Formas: **círculo**, **vertical** (móvil), **horizontal 16:9** o **sin cámara**.
-- **Zoom** de cámara (acercar/alejar), borde blanco opcional.
+### Cámara y formas
+- **Muchas formas de burbuja**: círculo, vertical (móvil), horizontal 16:9,
+  **SuperElipse** (squircle), **Pebble** (orgánica), **Círculo difuminado** (niebla),
+  **Escudo 1**, **Escudo 2**, **Arco**, **esquinas ancladas** (4 posiciones: la cámara
+  se pega a una esquina de la pantalla como cuarto de elipse) o **sin cámara**.
+- **Borde configurable** en todas las formas: activar/desactivar, **color** (selector
+  navegable saturación/tono + campo hexadecimal + paleta rápida) y **grosor** ajustable.
+- **Zoom** de cámara (acercar/alejar) y **espejo** como en Loom.
+- La **vista previa es idéntica a lo que se graba** (WYSIWYG): la burbuja flotante se ve
+  exactamente como saldrá en el video.
 
 ### Barra de presentación (mientras grabas)
 - Puntero **láser**, dibujar **rectángulos**, **flechas**, **números** y **confeti** 🎉 (con colores y grosor).
@@ -62,23 +69,68 @@ Al grabar aparece una **barra flotante** con los controles (no sale en el video)
 
 En reels con **video / presentación / pantalla** aparecen además sus controles: ◀◀/⏸ del video, **‹ / ›** para pasar diapositivas, o **🔍− / 🔍+** para el zoom de la pantalla.
 
-## ✅ Requisitos
+## 🛠️ Instalación desde cero (paso a paso)
 
-- **Windows 10 (2004+) o Windows 11**
-- **Node.js 18+**
-- `ffmpeg` incluido vía `ffmpeg-static` (con respaldo al del PATH).
-- Para **subtítulos**: una API key gratuita de Groq (console.groq.com).
-- Para **PowerPoint → PDF**: tener PowerPoint instalado.
-- Para **YouTube**: `yt-dlp` (`pip install yt-dlp`).
+> Si solo quieres **usar** Joom, haz la **Opción A**. La **Opción B** es para
+> ejecutar/compilar desde el código.
 
-## 🚀 Uso
+### Opción A — Solo usar la app (lo más fácil, sin instalar nada técnico)
 
-```bash
-npm install
-npm start
-```
+1. Entra a **https://github.com/jairocarrizales/joom/releases** y descarga
+   `Joom-Setup-x.y.z.exe`.
+2. Doble clic en el archivo. Si Windows muestra *"Windows protegió tu PC"*
+   (SmartScreen, porque la app no está firmada): clic en **"Más información"** →
+   **"Ejecutar de todas formas"**.
+3. Sigue el instalador (**no** requiere permisos de administrador). Se crean accesos en
+   el **escritorio** y el **menú inicio**.
+4. Abre **Joom**. La primera vez Windows pedirá permiso de **cámara** y **micrófono** →
+   pulsa **Permitir**.
+5. ¡Listo! Elige el modo, la cámara y su forma, y pulsa **Grabar**.
 
-La primera vez Windows pedirá permiso para cámara/micrófono.
+Eso es todo para grabar. Los **extras** de abajo solo hacen falta si vas a usar esas
+funciones concretas (subtítulos, YouTube, PowerPoint).
+
+### Opción B — Ejecutar/compilar desde el código (equipo sin nada instalado)
+
+1. **Instala Node.js** (incluye `npm`):
+   - Ve a **https://nodejs.org** → descarga la versión **LTS** (instalador `.msi` de
+     Windows) → instálala (Siguiente → Siguiente → Finalizar).
+   - Abre una terminal **nueva** y verifica: `node -v` y `npm -v`.
+2. **Instala Git**:
+   - **https://git-scm.com/download/win** → instala con las opciones por defecto.
+   - Verifica: `git --version`.
+3. **Descarga el código**:
+   ```bash
+   git clone https://github.com/jairocarrizales/joom.git
+   cd joom
+   ```
+   (Alternativa sin Git: en GitHub, botón verde **Code → Download ZIP**, y descomprime.)
+4. **Instala las dependencias** (descarga Electron y ffmpeg automáticamente; tarda unos
+   minutos):
+   ```bash
+   npm install
+   ```
+5. **Ejecuta la app**:
+   ```bash
+   npm start
+   ```
+6. **(Opcional) Crea tu propio instalador `.exe`**:
+   ```bash
+   npm run dist
+   ```
+   Queda en la carpeta `dist/` (instalador **NSIS**, Windows x64).
+
+### 🔌 Extras opcionales
+
+| Función | Qué instalar / hacer |
+|---|---|
+| **Subtítulos con IA** | Crea una **API key gratuita** en **https://console.groq.com** (API Keys) y pégala en la pestaña *Subtítulos* de Joom (se guarda en tu equipo). |
+| **Insertar video de YouTube** en reels | Instala **yt-dlp**: descarga `yt-dlp.exe` de https://github.com/yt-dlp/yt-dlp/releases y ponlo en el PATH, **o** con Python: `pip install yt-dlp`. Verifica con `yt-dlp --version`. |
+| **Insertar PowerPoint** (`.pptx`) | Ten **PowerPoint** instalado (Joom lo convierte a PDF). **PDF** y **Google Slides** funcionan sin nada extra. |
+| **ffmpeg** | **Ya viene incluido** (`ffmpeg-static`). No instalas nada. |
+
+**Requisitos del sistema:** Windows 10 (2004+) o Windows 11. Para compilar/ejecutar
+desde código: Node.js 18+ y Git.
 
 ## ⌨️ Atajos de teclado
 
@@ -90,14 +142,6 @@ La primera vez Windows pedirá permiso para cámara/micrófono.
 | `Ctrl+Shift+L` | Activar/desactivar láser |
 | `Ctrl+Shift+C` | Confeti 🎉 |
 | `Ctrl+Shift+S` | Modo captura (para tomar screenshots de Joom) |
-
-## 📦 Compilar un instalador
-
-```bash
-npm run dist
-```
-
-Genera un instalador **NSIS** en `dist/` (Windows x64).
 
 ## 🧩 Arquitectura
 
