@@ -9,64 +9,6 @@ Construido con **Electron**. La pantalla y la cámara se componen en tiempo real
 un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **MP4**
 (H.264 + AAC, listo para redes/web).
 
-## ✨ Funciones
-
-### Modos de grabación
-- **Pantalla completa** (horizontal) con la cámara como **burbuja flotante** (movible y redimensionable).
-- **Reel vertical** (9:16, salida 1080×1920) con varios diseños:
-  - **Solo cámara** (100%).
-  - **Video arriba / abajo + cámara**: inserta un video de **YouTube** (lo descarga), un **video de tu PC**, una **presentación PDF/PowerPoint** o **Google Slides**.
-  - **Pantalla arriba / abajo + cámara**: tu pantalla en una banda, con **zoom en vivo** para resaltar detalles.
-- **Podcast** (pantalla + cámara vertical): pantalla a alto completo y cámara vertical al lado; la cámara se puede **alejar/acercar** y desplazar.
-
-### Cámara y formas
-- **Muchas formas de burbuja**: círculo, vertical (móvil), horizontal 16:9,
-  **SuperElipse** (squircle), **Pebble** (orgánica), **Círculo difuminado** (niebla),
-  **Escudo 1**, **Escudo 2**, **Arco**, **esquinas ancladas** (4 posiciones: la cámara
-  se pega a una esquina de la pantalla como cuarto de elipse) o **sin cámara**.
-- **Borde configurable** en todas las formas: activar/desactivar, **color** (selector
-  navegable saturación/tono + campo hexadecimal + paleta rápida) y **grosor** ajustable.
-- **Zoom** de cámara (acercar/alejar) y **espejo** como en Loom.
-- La **vista previa es idéntica a lo que se graba** (WYSIWYG): la burbuja flotante se ve
-  exactamente como saldrá en el video.
-
-### Barra de presentación (mientras grabas)
-- Puntero **láser**, dibujar **rectángulos**, **flechas**, **números** y **confeti** 🎉 (con colores y grosor).
-- **Teleprompter** flotante (guion desplazable) que no aparece en el video.
-
-### Video / presentaciones en el reel (controlable mientras grabas)
-- **Video** (YouTube o de tu PC): **pausar/reanudar** y **regresar 10 s**, con su audio incluido.
-- **Presentaciones** (PDF, PowerPoint o Google Slides): pasar diapositivas con **‹ anterior / siguiente ›** (una a la vez). El PowerPoint se convierte a PDF usando el PowerPoint instalado.
-- **Pantalla en banda**: **zoom y desplazamiento** en vivo (rueda/arrastre o botones) para resaltar un detalle.
-
-### Subtítulos automáticos (con IA)
-- Transcripción con **Groq** (Whisper `whisper-large-v3`) con **tiempos por palabra**.
-- **~32 estilos** (POP/Reel, palabra, caja, manuscrita, DIN colores, disruptivos, clásico…), quemados en el video.
-- Opción de **corregir palabras** con un LLM de Groq.
-- Solo necesitas tu **API key de Groq** (gratuita) en la pestaña *Subtítulos*; se guarda en tu equipo.
-
-### Otros
-- Selector de **calidad** (720p / 1080p / 1080p60 / 1440p), **micrófono** y **audio del sistema**.
-- **Modo captura** (`Ctrl+Shift+S`): Joom se oculta de tus grabaciones por defecto; este modo lo hace visible temporalmente para que puedas tomar **capturas de pantalla** de la app.
-
-## 🎬 La barra de grabación
-
-Al grabar aparece una **barra flotante** con los controles (no sale en el video).
-
-**Compacta:**
-
-![Barra compacta](docs/barra-compacta.png)
-
-`⏱` tiempo · **⏸** pausar · **⏹** detener · **⬆️** traer la cámara al frente · **✏️** abrir anotaciones.
-
-**Abierta** (herramientas para presentar):
-
-![Barra abierta](docs/barra-abierta.png)
-
-**⦿** láser · **▭** rectángulo · **→** flecha · **①** números · **✦** confeti · grosor de línea · **colores** · **🗑️** borrar.
-
-En reels con **video / presentación / pantalla** aparecen además sus controles: ◀◀/⏸ del video, **‹ / ›** para pasar diapositivas, o **🔍− / 🔍+** para el zoom de la pantalla.
-
 ## 🛠️ Instalación desde cero (paso a paso)
 
 > Si solo quieres **usar** Joom, haz la **Opción A**. La **Opción B** es para
@@ -130,6 +72,64 @@ funciones concretas (subtítulos, YouTube, PowerPoint).
 **Requisitos del sistema:** Windows 10 (2004+) o Windows 11. Para compilar/ejecutar
 desde código: Node.js 18+ y Git.
 
+## ✨ Funciones
+
+### Modos de grabación
+- **Pantalla completa** (horizontal) con la cámara como **burbuja flotante** (movible y redimensionable).
+- **Reel vertical** (9:16, salida 1080×1920) con varios diseños:
+  - **Solo cámara** (100%).
+  - **Video arriba / abajo + cámara**: inserta un video de **YouTube** (lo descarga), un **video de tu PC**, una **presentación PDF/PowerPoint** o **Google Slides**.
+  - **Pantalla arriba / abajo + cámara**: tu pantalla en una banda, con **zoom en vivo** para resaltar detalles.
+- **Podcast** (pantalla + cámara vertical): pantalla a alto completo y cámara vertical al lado; la cámara se puede **alejar/acercar** y desplazar.
+
+### Cámara y formas
+- **Muchas formas de burbuja**: círculo, vertical (móvil), horizontal 16:9,
+  **SuperElipse** (squircle), **Pebble** (orgánica), **Círculo difuminado** (niebla),
+  **Escudo 1**, **Escudo 2**, **Arco**, **esquinas ancladas** (4 posiciones: la cámara
+  se pega a una esquina de la pantalla como cuarto de elipse) o **sin cámara**.
+- **Borde configurable** en todas las formas: activar/desactivar, **color** (selector
+  navegable saturación/tono + campo hexadecimal + paleta rápida) y **grosor** ajustable.
+- **Zoom** de cámara (acercar/alejar) y **espejo** como en Loom.
+- La **vista previa es idéntica a lo que se graba** (WYSIWYG): la burbuja flotante se ve
+  exactamente como saldrá en el video.
+
+### Barra de presentación (mientras grabas)
+- Puntero **láser**, dibujar **rectángulos**, **flechas**, **números** y **confeti** 🎉 (con colores y grosor).
+- **Teleprompter** flotante (guion desplazable) que no aparece en el video.
+
+### Video / presentaciones en el reel (controlable mientras grabas)
+- **Video** (YouTube o de tu PC): **pausar/reanudar** y **regresar 10 s**, con su audio incluido.
+- **Presentaciones** (PDF, PowerPoint o Google Slides): pasar diapositivas con **‹ anterior / siguiente ›** (una a la vez). El PowerPoint se convierte a PDF usando el PowerPoint instalado.
+- **Pantalla en banda**: **zoom y desplazamiento** en vivo (rueda/arrastre o botones) para resaltar un detalle.
+
+### Subtítulos automáticos (con IA)
+- Transcripción con **Groq** (Whisper `whisper-large-v3`) con **tiempos por palabra**.
+- **~32 estilos** (POP/Reel, palabra, caja, manuscrita, DIN colores, disruptivos, clásico…), quemados en el video.
+- Opción de **corregir palabras** con un LLM de Groq.
+- Solo necesitas tu **API key de Groq** (gratuita) en la pestaña *Subtítulos*; se guarda en tu equipo.
+
+### Otros
+- Selector de **calidad** (720p / 1080p / 1080p60 / 1440p), **micrófono** y **audio del sistema**.
+- **Modo captura** (`Ctrl+Shift+S`): Joom se oculta de tus grabaciones por defecto; este modo lo hace visible temporalmente para que puedas tomar **capturas de pantalla** de la app.
+
+## 🎬 La barra de grabación
+
+Al grabar aparece una **barra flotante** con los controles (no sale en el video).
+
+**Compacta:**
+
+![Barra compacta](docs/barra-compacta.png)
+
+`⏱` tiempo · **⏸** pausar · **⏹** detener · **⬆️** traer la cámara al frente · **✏️** abrir anotaciones.
+
+**Abierta** (herramientas para presentar):
+
+![Barra abierta](docs/barra-abierta.png)
+
+**⦿** láser · **▭** rectángulo · **→** flecha · **①** números · **✦** confeti · grosor de línea · **colores** · **🗑️** borrar.
+
+En reels con **video / presentación / pantalla** aparecen además sus controles: ◀◀/⏸ del video, **‹ / ›** para pasar diapositivas, o **🔍− / 🔍+** para el zoom de la pantalla.
+
 ## ⌨️ Atajos de teclado
 
 | Atajo | Acción |
@@ -167,4 +167,11 @@ Los subtítulos crean una copia `…-subs.mp4`.
 
 ## Licencia
 
-MIT — Jairo Carrizales
+**Licencia de Uso No Comercial (Propietaria/Custom)** — © 2026 Jairo Carrizales.
+Todos los derechos reservados.
+
+Uso **personal, educativo y de evaluación** permitido sin costo. Queda **prohibido el
+uso comercial, la redistribución, la venta y el sublicenciamiento** sin autorización
+previa y por escrito del autor. Para licencias comerciales: **WhatsApp +52 8261582103**.
+
+Consulta el archivo [LICENSE](LICENSE) para los términos completos.
