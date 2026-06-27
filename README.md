@@ -167,13 +167,18 @@ Los subtítulos crean una copia `…-subs.mp4`.
 
 **Jairo Carrizales** — WhatsApp: **+52 8261582103**
 
-## Licencia
+## Términos de Uso y Licencia
 
-**Licencia de Uso No Comercial (Propietaria/Custom)** — © 2026 Jairo Carrizales.
-Todos los derechos reservados.
+© 2026 Jairo Carrizales. Todos los derechos de autor quedan reservados.
 
-Uso **personal, educativo y de evaluación** permitido sin costo. Queda **prohibido el
-uso comercial, la redistribución, la venta y el sublicenciamiento** sin autorización
-previa y por escrito del autor. Para licencias comerciales: **WhatsApp +52 8261582103**.
+Este software es de **código visible** pero **no es de código abierto** (Open Source)
+bajo términos tradicionales.
 
-Consulta el archivo [LICENSE](LICENSE) para los términos completos.
+- **Se permite:** el uso personal, educativo, la modificación privada y el estudio del
+  código fuente.
+- **Se prohíbe estrictamente:** la venta, distribución comercial, sublicenciamiento o
+  monetización (directa o indirecta) de este software, sus ejecutables o cualquier obra
+  derivada por parte de terceros.
+
+Para usos comerciales: **WhatsApp +52 8261582103**. Consulta el archivo
+[LICENSE](LICENSE) para los términos completos.
