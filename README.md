@@ -1,4 +1,8 @@
-# Joom 🎥
+<p align="center">
+  <img src="icono.png" alt="Joom" width="160" />
+</p>
+
+<h1 align="center">Joom 🎥</h1>
 
 Grabador de **pantalla + cámara para Windows**, pensado para crear contenido:
 grabaciones horizontales, **reels verticales** y modo **podcast**, con barra de
