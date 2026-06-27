@@ -9,8 +9,6 @@ Construido con **Electron**. La pantalla y la cámara se componen en tiempo real
 un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **MP4**
 (H.264 + AAC, listo para redes/web).
 
-
-
 ## ✨ Funciones
 
 ### Modos de grabación
