@@ -16,8 +16,10 @@ un `<canvas>` y se graban con `MediaRecorder`; al detener, `ffmpeg` exporta a **
 
 ### Opción A — Solo usar la app (lo más fácil, sin instalar nada técnico)
 
-1. Entra a **https://github.com/jairocarrizales/joom/releases** y descarga
-   `Joom-Setup-x.y.z.exe`.
+1. Descarga el instalador. Tienes dos formas:
+   - **Directo del repositorio:**
+     **https://github.com/jairocarrizales/joom/raw/main/release/Joom-Setup-0.1.0.exe**
+   - O desde la página de **Releases**: https://github.com/jairocarrizales/joom/releases
 2. Doble clic en el archivo. Si Windows muestra *"Windows protegió tu PC"*
    (SmartScreen, porque la app no está firmada): clic en **"Más información"** →
    **"Ejecutar de todas formas"**.
